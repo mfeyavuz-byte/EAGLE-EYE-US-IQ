@@ -1,4 +1,4 @@
-name: ABD BOT — Spot Tarama
+name: ABD BOT — Spot + Opsiyon
 
 # GitHub cron'u UTC'dir ve tetikleri atlayabilir/geciktirebilir. Bu yüzden cron yalnızca
 # DÖNGÜYÜ BAŞLATIR; iş içinde piyasa kapanana dek her 20 dk tarar (bist-bot ile aynı desen).

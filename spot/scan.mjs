@@ -1,15 +1,17 @@
 // Spot tarama — bist-bot'un scanOne mantığının ABD uyarlaması.
 // Günlük mum = sinyal, haftalık mum = üst trend. Varsa Alpaca canlı fiyatı son mumu günceller.
 import { getSignals, enrichData, getHigherTrend } from "../core/engine.mjs";
-import { fetchDaily, fetchWeekly } from "../data/yahoo.mjs";
+import { fetchDaily, weeklyFromDaily } from "../data/yahoo.mjs";
+import { readFileSync, existsSync } from "node:fs";
 import { nyDate, sessionFraction } from "../data/market.mjs";
+import { alpacaEnabled, dailyBars } from "../data/alpaca.mjs";
 
 const env = (k, d) => (process.env[k] != null && process.env[k] !== "" ? +process.env[k] : d);
 export const CFG = {
   MIN_CONF: env("MIN_CONF", 65),        // güven barı
   MIN_ADX: env("MIN_ADX", 20),          // trend gücü barı
   MAX_RSI_BUY: env("MAX_RSI_BUY", 63),  // geç/aşırı-alım girişi ele
-  MIN_DVOL: env("MIN_DVOL", 50e6),      // günlük ort. işlem hacmi ($) — ABD için 50M$
+  MIN_DVOL: env("MIN_DVOL", 20e6),      // günlük ort. işlem hacmi ($) — sinyal için 20M$
   CONC: env("CONC", 8),
 };
 
@@ -37,13 +39,24 @@ export function orientLevels(price, signal, { stopLoss, target1, target2 }) {
 }
 
 // Tek sembolün TAM analizi (filtresiz) — /hisse komutu ve tarama bunu kullanır.
-export async function analyze(sym, { live = null, spyRet60 = 0 } = {}) {
-  const daily = applyLive(await fetchDaily(sym), live);
+// Bu çalışmada çekilen günlük mumlar (opsiyon tarafı HV için yeniden kullanır → tekrar istek yok)
+export const dailyCache = new Map();
+
+// Evren: spot/universe.json (S&P 500 + Nasdaq, likidite filtreli; haftalık yenilenir). Yoksa symbols.json.
+export function loadUniverse() {
+  const u = new URL("./universe.json", import.meta.url), f = new URL("./symbols.json", import.meta.url);
+  if (existsSync(u)) { const j = JSON.parse(readFileSync(u, "utf8")); return { symbols: j.symbols, meta: j.meta || {}, updated: j.updated }; }
+  return { symbols: JSON.parse(readFileSync(f, "utf8")), meta: {}, updated: null };
+}
+
+export async function analyze(sym, { live = null, spyRet60 = 0, daily: pre = null } = {}) {
+  const daily = applyLive(pre && pre.length >= 60 ? pre : await fetchDaily(sym), live);
+  dailyCache.set(sym, daily);
   if (daily.length < 60) return null;
   const ed = enrichData(daily);
   const last = ed[ed.length - 1];
   if (!last) return null;
-  const weekly = await fetchWeekly(sym);
+  const weekly = weeklyFromDaily(daily);                    // üst trend: günlükten türetilmiş haftalık
   const k = getSignals(ed, getHigherTrend(weekly), weekly);
   if (!k) return null;
   const prev = daily.slice(-21, -1);                       // bugünün (kısmi) mumu hariç son 20 gün
@@ -82,18 +95,24 @@ export function passes(a) {
 }
 
 export async function scanAll(symbols, { liveMap = {}, spyRet60 = 0 } = {}) {
-  const out = [];
+  const out = [], all = [];
   let ok = 0;
-  for (let i = 0; i < symbols.length; i += CFG.CONC) {
-    const batch = symbols.slice(i, i + CFG.CONC);
-    const res = await Promise.all(batch.map(s => analyze(s, { live: liveMap[s], spyRet60 }).catch(() => null)));
-    res.forEach(a => { if (a) ok++; if (passes(a)) out.push(a); });
+  // Alpaca varsa tüm mumlar toplu çekilir (~60 istek); yoksa/eksikse sembol başına Yahoo.
+  const bulk = alpacaEnabled() ? await dailyBars(symbols) : {};
+  const nBulk = Object.keys(bulk).length;
+  if (alpacaEnabled()) console.log(`Alpaca toplu mum: ${nBulk}/${symbols.length} sembol`);
+  const conc = nBulk ? 32 : CFG.CONC;                       // toplu veride iş CPU'da → yüksek eşzamanlılık
+  for (let i = 0; i < symbols.length; i += conc) {
+    const batch = symbols.slice(i, i + conc);
+    const res = await Promise.all(batch.map(s => analyze(s, { live: liveMap[s], spyRet60, daily: bulk[s] }).catch(() => null)));
+    res.forEach(a => { if (a) { ok++; all.push(a); } if (passes(a)) out.push(a); });
   }
   out.sort((a, b) => a.signal !== b.signal ? (a.signal === "AL" ? -1 : 1) : b.confidence - a.confidence);
-  return { signals: out, analyzed: ok };
+  return { signals: out, analyzed: ok, all };
 }
 
 export async function spyReturn60() {
   const d = await fetchDaily("SPY");
+  dailyCache.set("SPY", d);
   return { ret60: +ret(d, 60).toFixed(1), rows: d };
 }

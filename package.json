@@ -9,6 +9,7 @@
     "start": "node bot/run.mjs",
     "dry": "DRY_RUN=1 FORCE=1 node bot/run.mjs",
     "backtest": "node core/backtest.mjs",
+    "universe": "node universe/build.mjs",
     "test": "node --test test/*.test.mjs"
   }
 }

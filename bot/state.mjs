@@ -1,32 +1,42 @@
 // Kalıcı durum — GitHub Gist (Actions makinesi her run'da sıfırlanır).
 // Okuma BAŞARISIZ ile gerçekten BOŞ ayrımı: başarısızlıkta READ_FAILED → çağıran ASLA yazmaz (bist-bot dersi).
+// Dosyalar: abd_state.json (bot durumu), abd_ivhist.json (IV30 geçmişi — IV rank için).
 const TOKEN = process.env.GH_GIST_TOKEN || "";
 const ID = process.env.GIST_ID || "";
 export const STATE_FILE = "abd_state.json";
+export const IVHIST_FILE = "abd_ivhist.json";
 export const READ_FAILED = Symbol("gist_read_failed");
 export const gistEnabled = () => !!(TOKEN && ID);
+const H = { Authorization: "Bearer " + TOKEN, Accept: "application/vnd.github+json" };
 
-export async function loadState() {
-  if (!gistEnabled()) return {};
+// Dönüş: { [dosya]: nesne } — dosya yoksa {}. Başarısızlıkta READ_FAILED.
+export async function loadFiles(names) {
+  if (!gistEnabled()) return Object.fromEntries(names.map(n => [n, {}]));
   try {
-    const r = await fetch(`https://api.github.com/gists/${ID}`, {
-      headers: { Authorization: "Bearer " + TOKEN, Accept: "application/vnd.github+json" },
-    });
+    const r = await fetch(`https://api.github.com/gists/${ID}`, { headers: H });
     if (!r.ok) return READ_FAILED;
     const g = await r.json();
-    const c = g.files?.[STATE_FILE]?.content;
-    return c ? JSON.parse(c) : {};
+    const out = {};
+    for (const n of names) {
+      const f = g.files?.[n];
+      if (!f) { out[n] = {}; continue; }
+      let c = f.content;
+      if (f.truncated && f.raw_url) {                  // 1 MB üstü dosyalar API'de kesilir → ham adresten al
+        const rr = await fetch(f.raw_url, { headers: { Authorization: "Bearer " + TOKEN } });
+        if (!rr.ok) return READ_FAILED;
+        c = await rr.text();
+      }
+      out[n] = c ? JSON.parse(c) : {};
+    }
+    return out;
   } catch { return READ_FAILED; }
 }
 
-export async function saveState(st) {
+export async function saveFiles(files) {
   if (!gistEnabled()) return false;
   try {
-    const r = await fetch(`https://api.github.com/gists/${ID}`, {
-      method: "PATCH",
-      headers: { Authorization: "Bearer " + TOKEN, "Content-Type": "application/json" },
-      body: JSON.stringify({ files: { [STATE_FILE]: { content: JSON.stringify(st) } } }),
-    });
+    const body = { files: Object.fromEntries(Object.entries(files).map(([n, o]) => [n, { content: JSON.stringify(o) }])) };
+    const r = await fetch(`https://api.github.com/gists/${ID}`, { method: "PATCH", headers: { ...H, "Content-Type": "application/json" }, body: JSON.stringify(body) });
     if (!r.ok) console.error("[Gist] yazılamadı", r.status);
     return r.ok;
   } catch (e) { console.error("[Gist]", e.message); return false; }

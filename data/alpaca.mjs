@@ -33,6 +33,32 @@ export async function liveQuotes(symbols) {
   return out;
 }
 
+// TOPLU GÜNLÜK MUM — tüm piyasa (SIP) verisi. Ücretsiz planda SIP ≥15 dk gecikmeli serbest:
+// bitişi "şimdi − 16 dk" alırız → bugünün mumu 16 dk öncesine kadar tam hacimle gelir.
+// 200 sembollük gruplar + sayfalama → ~1.200 hisse × 2 yıl ≈ 60–70 istek (Yahoo'da 1.200 istek olurdu).
+// Dönüş: { SYM: [{ts, open, high, low, close, volume}] } — başarısız gruplar boş kalır (Yahoo'ya düşülür).
+export async function dailyBars(symbols, years = 2) {
+  const out = {};
+  if (!alpacaEnabled()) return out;
+  const start = new Date(Date.now() - years * 365.25 * 864e5).toISOString().slice(0, 10);
+  const end = new Date(Date.now() - 16 * 60e3).toISOString();
+  for (let i = 0; i < symbols.length; i += 200) {
+    const chunk = symbols.slice(i, i + 200);
+    let token = null, pages = 0;
+    do {
+      const u = `https://data.alpaca.markets/v2/stocks/bars?symbols=${encodeURIComponent(chunk.join(","))}&timeframe=1Day&start=${start}&end=${encodeURIComponent(end)}&limit=10000&adjustment=all&feed=sip${token ? "&page_token=" + encodeURIComponent(token) : ""}`;
+      const j = await getJSON(u, 20000);
+      if (!j) break;
+      for (const [sym, bars] of Object.entries(j.bars || {})) {
+        const arr = out[sym] || (out[sym] = []);
+        for (const b of bars) arr.push({ ts: Date.parse(b.t), date: "", open: b.o, high: b.h, low: b.l, close: b.c, volume: b.v });
+      }
+      token = j.next_page_token; pages++;
+    } while (token && pages < 50);
+  }
+  return out;
+}
+
 // Piyasa açık mı? (resmî tatilleri bilir). Alpaca yoksa null → çağıran saat hesabına düşer.
 export async function alpacaClock() {
   if (!alpacaEnabled()) return null;

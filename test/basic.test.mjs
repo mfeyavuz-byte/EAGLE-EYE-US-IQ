@@ -2,7 +2,16 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { isRegularHours, sessionFraction, nyDate } from "../data/market.mjs";
 import { passes } from "../spot/scan.mjs";
-import { fmtSignal } from "../bot/run.mjs";
+import { fmtSignal, diversify } from "../bot/run.mjs";
+
+test("opsiyon fikirlerinde yoğunlaşma koruması", () => {
+  const mk = (sym, code, dir) => ({ sym, idea: { code, dir } });
+  const list = ["A", "B", "C", "D", "E", "F", "G"].map(s => mk(s, "BEAR_PUT", -1)).concat([mk("Z", "IRON_CONDOR", 0)]);
+  const out = diversify(list, 6).map(x => x.idea.code);
+  assert.equal(out.filter(c => c === "BEAR_PUT").length, 3);          // en çok 3 aynı strateji
+  assert.ok(out.includes("IRON_CONDOR"));                              // farklı yapı listede
+  assert.equal(out.length, 4);                                         // kopya bahisler gönderilmez
+});
 
 test("seans saatleri: yaz saati (EDT)", () => {
   assert.equal(isRegularHours(new Date("2026-07-15T13:29:00Z")), false); // 09:29 NY

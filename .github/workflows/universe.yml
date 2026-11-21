@@ -1,0 +1,35 @@
+name: ABD BOT — Evren Yenile (haftalık)
+
+# S&P 500 + Nasdaq listesi değişir (halka arzlar, endeks değişiklikleri, likidite).
+# Her Pazar evreni yeniden kurar ve spot/universe.json değiştiyse repoya commit eder.
+on:
+  schedule:
+    - cron: "0 6 * * 0"     # Pazar 06:00 UTC (piyasa kapalı)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: abd-universe
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Evreni kur
+        run: node universe/build.mjs
+      - name: Değiştiyse commit et
+        run: |
+          if git diff --quiet -- spot/universe.json; then echo "Değişiklik yok."; exit 0; fi
+          git config user.name "abd-bot"
+          git config user.email "abd-bot@users.noreply.github.com"
+          git add spot/universe.json
+          git commit -m "Evren güncellendi ($(date -u +%F))"
+          git push
