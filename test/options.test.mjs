@@ -337,3 +337,29 @@ test("sabah: skor, hedef/stop, NÖTR günü, karne ve çapraz kontrol", async ()
   assert.match(crossProblem({ price: 600, ts: now }, { price: 610 }, now).problem, /farklı/);
   assert.match(crossProblem(null, { price: 600 }, now).problem, /gelmedi/);
 });
+
+test("korku & açgözlülük: hesap, etiket, ETF aşırı korku call'ı ve çıkışı", async () => {
+  const { computeFG, fgLabel } = await import("../spot/feargreed.mjs");
+  const { runEtf } = await import("../bot/etf.mjs");
+  const days = Array.from({ length: 400 }, (_, i) => new Date(Date.UTC(2025, 0, 1) + i * 864e5).toISOString().slice(0, 10));
+  const mk = f => new Map(days.map((d, i) => [d, f(i)]));
+  // Son 20 günde sert düşüş + VIX sıçraması + tahvile kaçış + riskli tahvil satışı → aşırı korku
+  const crash = i => (i < 380 ? 1 : 0);
+  const series = { SPY: mk(i => 100 + i * 0.1 - (1 - crash(i)) * (i - 379) * 2), "^VIX": mk(i => 15 + (1 - crash(i)) * (i - 379) * 2),
+    TLT: mk(i => 100 + (1 - crash(i)) * (i - 379) * 0.5), HYG: mk(i => 80 - (1 - crash(i)) * (i - 379) * 0.3), IEF: mk(i => 100 + (1 - crash(i)) * (i - 379) * 0.2) };
+  const fg = computeFG(series);
+  assert.ok(fg.length > 100);
+  assert.ok(fg.at(-1).fg < 25, `son değer ${fg.at(-1).fg}`);
+  assert.equal(fgLabel(10), "AŞIRI KORKU"); assert.equal(fgLabel(50), "nötr"); assert.equal(fgLabel(90), "AŞIRI AÇGÖZLÜLÜK");
+  // ETF: RSI/put sinyali yokken aşırı korku → call (kind fg); endeks 50'ye dönünce KAPAT
+  const flat = Array.from({ length: 250 }, (_, i) => 100 + (i % 2) * 0.5);
+  const call = (K, delta, mid) => ({ type: "C", K, delta, mid, bid: mid - 0.05, ask: mid + 0.05, spreadPct: 0.1 / mid, liquid: true, sym: `X${K}` });
+  const chain = { expiries: [{ exp: 1799280000, dte: 33, calls: [call(100, 0.6, 4)], puts: [] }] };
+  const st = {};
+  const o1 = await runEtf(st, { today: "2026-11-02", fg: 8, closesFor: async () => flat, chainFor: async () => chain });
+  assert.ok(o1.some(l => l.includes("AŞIRI KORKU")));
+  assert.equal(st.etf.pos.SPY.kind, "fg");
+  assert.equal((await runEtf(st, { today: "2026-11-03", fg: 30, closesFor: async () => flat, chainFor: async () => chain })).length, 0);   // henüz nötr değil
+  const o3 = await runEtf(st, { today: "2026-11-04", fg: 55, closesFor: async () => flat, chainFor: async () => chain });
+  assert.ok(o3.some(l => l.includes("ETF KAPAT") && l.includes("nötr")));
+});

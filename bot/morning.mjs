@@ -52,6 +52,9 @@ export async function buildMorning(deps) {
   const v = vix.at(-1), vChg = vix.length > 1 ? v / vix.at(-2) - 1 : 0;
   L.push(`🌅 AÇILIŞ ÖNCESİ — SPY / QQQ gün içi eğilim · ${deps.today}`);
   L.push(`Duyarlılık: VIX ${v.toFixed(1)} (dün ${pc(vChg)}) · ${v > 30 ? "YÜKSEK KORKU" : v > 20 ? "gergin" : "sakin"} · vadeli: ES ${fx("SPY") != null ? pc(fx("SPY")) : "—"} · NQ ${fx("QQQ") != null ? pc(fx("QQQ")) : "—"}`);
+  // Korku & Açgözlülük: 1 günlük etkisi tutarsız → gün içi skora katılmaz; 5–10 günlük etki ETF modülünde kullanılır
+  const fgTxt = deps.fearGreed ? await deps.fearGreed().catch(() => null) : null;
+  if (fgTxt) L.push(fgTxt + "\n   (gün içi skora katılmaz: 1 günlük etkisi ölçümde tutarsız; 5–10 günlük etkisi ETF fırsatlarında kullanılır)");
   for (const sym of ["SPY", "QQQ"]) {
     const closes = await deps.closesFor(sym);
     const s = closes && morningScore(closes, vix);

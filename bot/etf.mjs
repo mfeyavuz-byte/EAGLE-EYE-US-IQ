@@ -13,6 +13,9 @@ export const ETF_OPT = {
   MAX_RISK: +(process.env.ETF_RISK || 0.02),   // ödenen prim en çok hesabın %2'si (opsiyon tamamen sıfırlanabilir)
   PUTS: process.env.ETF_PUTS !== "0",          // düşüş sinyalinde long put (yalnız ALIM; satış yok)
 };
+// AŞIRI KORKU kuralı (research/feargreed.mjs): Korku & Açgözlülük < 25 → 10 işlem günü call; endeks ≥ 50 olursa erken çık.
+// Aşırı açgözlülük (> 75) iki dönemde tutarsız → put sinyali OLARAK KULLANILMAZ. FG_ETF=0 kapatır.
+export const FG_RULE = { ON: process.env.FG_ETF !== "0", ENTRY: 25, EXIT: 50, HOLD: 10 };
 const fill = (o, side) => o.mid + side * SLIP * (o.ask - o.bid);
 const trDate = d => `${d.slice(8, 10)}.${d.slice(5, 7)}`;
 
@@ -40,15 +43,18 @@ export async function runEtf(st, deps) {
     const pos = st.etf.pos[sym];
     if (pos) {
       const type = pos.type || "C", td = tradingDays(pos.d, today);
-      const hit = type === "P" ? s.putExit : s.exit;
-      if (!(hit || td >= ETF_CFG.MAXD)) continue;
+      // Korku sinyali (kind "fg"): 10 işlem günü ya da endeks ≥ 50'ye (nötre) dönünce çık; diğerleri: 5g ortalama kuralı
+      const isFg = pos.kind === "fg";
+      const hit = isFg ? deps.fg != null && deps.fg >= FG_RULE.EXIT : type === "P" ? s.putExit : s.exit;
+      const maxD = isFg ? FG_RULE.HOLD : ETF_CFG.MAXD;
+      if (!(hit || td >= maxD)) continue;
       const chain = await deps.chainFor(sym, pos.expTs);              // pozisyonun kendi vadesi
       const ex = chain?.expiries.find(e => e.exp === pos.expTs);
       const o = legsOf(ex, type).find(x => x.sym === pos.occ) || legsOf(ex, type).find(x => x.K === pos.K);
       if (!o || !(o.mid > 0)) { st.etf.last[sym] = null; continue; } // kotasyon yok → sonraki run tekrar dene
       const px = Math.max(0, fill(o, -1)), ret = px / pos.px - 1;
       const rec = { ...pos, type, exitD: today, exitPx: +px.toFixed(2), ret: +ret.toFixed(4), pnl: Math.round((px - pos.px) * 100), td,
-        why: hit ? (type === "P" ? "5g ortalamanın altında kapandı" : "5g ortalamanın üstünde kapandı") : `${ETF_CFG.MAXD} işlem günü doldu`,
+        why: hit ? (isFg ? `korku endeksi ${deps.fg}'e döndü (nötr)` : type === "P" ? "5g ortalamanın altında kapandı" : "5g ortalamanın üstünde kapandı") : `${maxD} işlem günü doldu`,
         undRet: +(s.price / pos.S - 1).toFixed(4) };
       st.etf.book.push(rec); delete st.etf.pos[sym];
       if (st.etf.book.length > 300) st.etf.book.splice(0, st.etf.book.length - 300);
@@ -56,17 +62,32 @@ export async function runEtf(st, deps) {
         `Giriş $${pos.px} → çıkış ~$${rec.exitPx} · ${ret >= 0 ? "✅" : "❌"} ${(ret * 100).toFixed(1)}% (${rec.pnl >= 0 ? "+" : "−"}$${Math.abs(rec.pnl)}/kontrat)`);
       continue;
     }
-    const type = s.tier ? "C" : s.putTier && ETF_OPT.PUTS ? "P" : null;
+    // Öncelik: RSI(2) call (en güçlü, ~3 gün) → AŞIRI KORKU call (5–10 gün) → zayıf put
+    const fgHit = FG_RULE.ON && deps.fg != null && deps.fg < FG_RULE.ENTRY;
+    const type = s.tier ? "C" : fgHit ? "C" : s.putTier && ETF_OPT.PUTS ? "P" : null;
     if (!type) continue;
-    const tierLab = type === "C" ? (s.tier === "güçlü" ? "GÜÇLÜ" : "normal") : "zayıf";
+    const kind = s.tier ? "rsi" : fgHit ? "fg" : "put";
+    const tierLab = kind === "rsi" ? (s.tier === "güçlü" ? "GÜÇLÜ" : "normal") : kind === "fg" ? "AŞIRI KORKU" : "zayıf";
     const chain = await deps.chainFor(sym);
     const pick = pickContract(chain, ETF_OPT.DTE, ETF_OPT.DELTA, type);
     if (!pick) { out.push(`ℹ ${sym}: ${type === "C" ? "call" : "put"} sinyali var (${tierLab}) ama uygun likit kontrat bulunamadı.`); continue; }
     const { ex, c } = pick, px = +fill(c, 1).toFixed(2);
     const expD = new Date(ex.exp * 1e3).toISOString().slice(0, 10);
-    st.etf.pos[sym] = { sym, type, d: today, occ: c.sym, K: c.K, exp: expD, expTs: ex.exp, px, S: s.price, tier: type === "C" ? s.tier : s.putTier };
-    const maxD = new Date(Date.parse(today + "T12:00:00Z") + 14 * 864e5).toISOString().slice(0, 10);
+    st.etf.pos[sym] = { sym, type, kind, d: today, occ: c.sym, K: c.K, exp: expD, expTs: ex.exp, px, S: s.price, tier: kind === "rsi" ? s.tier : kind === "fg" ? `korku ${deps.fg}` : s.putTier };
     const C = type === "C";
+    if (kind === "fg") {
+      const maxD = new Date(Date.parse(today + "T12:00:00Z") + 15 * 864e5).toISOString().slice(0, 10);
+      out.push([
+        `😱 ETF FIRSAT — ${sym} CALL (AŞIRI KORKU · 5–10 gün)`,
+        `Korku & Açgözlülük endeksi ${deps.fg}/100 (< ${FG_RULE.ENTRY}) · fiyat $${s.price.toFixed(2)} · 200g ort. $${s.sma200.toFixed(2)} (${s.up200 ? "üstünde" : "altında"})`,
+        `AL ${c.K}C · vade ${trDate(expD)} (${ex.dte}g) · delta ${c.delta.toFixed(2)} · ~$${px} (orta $${c.mid.toFixed(2)}, spread %${(c.spreadPct * 100).toFixed(1)})`,
+        `ÇIKIŞ PLANI: endeks ${FG_RULE.EXIT}'ye (nötre) dönünce ya da en geç ${FG_RULE.HOLD} işlem günü (~${trDate(maxD)}) → bot KAPAT mesajı atar.`,
+        `Boyut: ödenen prim hesabın en çok %${ETF_OPT.MAX_RISK * 100}'si (1 kontrat $${Math.round(px * 100)}). Korku dönemlerinde oynaklık yüksektir; opsiyon sıfırlanabilir.`,
+        `Geçmiş (2008–2026, eğitim/test ayrı): aşırı korkuda 10 gün sonra SPY ort. +%0.62 / +%0.73 (taban +%0.28 / +%0.53), QQQ +%0.76 / +%1.01; yükselen oran ~%61–62 (tabanla benzer) → avantaj ortalamada, isabette değil.`,
+      ].join("\n"));
+      continue;
+    }
+    const maxD = new Date(Date.parse(today + "T12:00:00Z") + 14 * 864e5).toISOString().slice(0, 10);
     out.push([
       `${C ? "📈" : "📉"} ETF FIRSAT — ${sym} ${C ? "CALL" : "PUT"} (${tierLab} sinyal)`,
       C ? `Yükselen trendde kısa vadeli aşırı satım: RSI(2) ${s.rsi2.toFixed(1)} · fiyat $${s.price.toFixed(2)} > 200g ort. $${s.sma200.toFixed(2)}`

@@ -13,7 +13,8 @@ import { addWatch, removeWatch, checkWatch, fmtWatch } from "./watch.mjs";
 import { paperEnabled, runPaper, paperSummary } from "./paper.mjs";
 import { liveQuotes, alpacaEnabled, news, isTradingDay } from "../data/alpaca.mjs";
 import { isMarketOpen, isRegularHours, nyDate, nyParts, fmtTR } from "../data/market.mjs";
-import { riskFreeRate, fetchDaily, optionChain, quoteNow } from "../data/yahoo.mjs";
+import { riskFreeRate, fetchDaily, fetchHistory, optionChain, quoteNow } from "../data/yahoo.mjs";
+import { loadFG, fgLabel } from "../spot/feargreed.mjs";
 import { buildMorning, settleMorning, fmtMorningBook, MORNING } from "./morning.mjs";
 import { loadFiles, saveFiles, READ_FAILED, gistEnabled, STATE_FILE, IVHIST_FILE, trimState } from "./state.mjs";
 import { sendTG, sendPhoto, fetchCommands } from "./telegram.mjs";
@@ -134,6 +135,27 @@ const HELP = [
   "/yardim — bu liste",
 ].join("\n");
 
+// ---------- Korku & Açgözlülük (CNN yöntemiyle kendi hesabımız) ----------
+// Günde en çok 2 kez: ilk ihtiyaçta (sabah: dünkü kapanışlarla) ve 15:30 NY sonrası (kapanışa yakın değerlerle).
+export async function getFG(st, late = false) {
+  const today = nyDate();
+  if (st.fg?.at === today && (!late || st.fg.late)) return st.fg;
+  try {
+    const s = await loadFG(fetchHistory, nyDate);
+    const last = s.at(-1);
+    if (!last) return st.fg || null;
+    st.fg = { at: today, late, d: last.d, fg: last.fg, parts: last.parts, prev: s.at(-2)?.fg ?? null, wk: s.at(-6)?.fg ?? null };
+  } catch (e) { console.error("[Korku/Açgözlülük]", e?.message || e); }
+  return st.fg || null;
+}
+export function fmtFG(f) {
+  if (!f) return "Korku & Açgözlülük: veri yok";
+  const p = f.parts;
+  return `😨 Korku & Açgözlülük ${f.fg}/100 — ${fgLabel(f.fg)}` + (f.prev != null ? ` (dün ${f.prev}, 1 hafta önce ${f.wk ?? "—"})` : "") +
+    `\n   momentum ${p.mom} · oynaklık (VIX) ${p.vol} · güvenli liman ${p.haven} · riskli tahvil ${p.junk}` +
+    (f.fg < 25 ? "\n   ↳ Aşırı korku: geçmişte 5–10 gün içinde SPY/QQQ ortalamada tabanın üstünde (alım yönü)." : "");
+}
+
 // ---------- Açılış öncesi mesaj ----------
 async function completedCloses(sym, today) {
   const rows = await fetchDaily(sym).catch(() => []);
@@ -164,6 +186,7 @@ async function morningStep(st, ctx) {
       return c ? { K: c.K, exp: new Date(ex.exp * 1e3).toISOString().slice(0, 10), dte: ex.dte, delta: c.delta, mid: c.mid, spreadPct: c.spreadPct } : null;
     },
     headlines: async () => (await news("SPY", 4)).map(n => n.headline),
+    fearGreed: async () => fmtFG(await getFG(st)),
   });
   if (await sendTG(text, { buttons: [[{ text: "⚡ SPY/QQQ durumu", data: "/etf" }, { text: "🌅 Sabah karnesi", data: "/sabah" }]] })) {
     st.morning.day = today;
@@ -210,6 +233,7 @@ export function weeklyReport(st, today, paperTxt = null) {
     fmtSpotReport(sc, daysAgo(today, 30), "📈 Son 30 gün"), "",
     fmtStats(stats(st.optBook || []))];
   if (paperTxt) L.push("", paperTxt);
+  if (st.fg) L.push("", fmtFG(st.fg));
   if (st.calib) L.push("", fmtCalib(st.calib));
   if (st.etf) L.push("", fmtEtfBook(st));
   if (st.morning?.book?.length) L.push("", fmtMorningBook(st.morning.book));
@@ -284,6 +308,7 @@ async function handleCommands(st, ivStore, ctx) {
     } else if (cmd === "/etf") {
       const lines = [];
       for (const s of ETFS_FAST) lines.push(fmtEtfState(s, etfState(await etfCloses(s))));
+      lines.push(fmtFG(await getFG(st)));
       await sendTG(["⚡ SPY/QQQ KISA VADE (call alımı)", ...lines, "", fmtEtfBook(st)].join("\n"));
     } else if (cmd === "/portfoy") {
       const today = nyDate();
@@ -310,7 +335,7 @@ async function handleCommands(st, ivStore, ctx) {
         `IV geçmişi: ${Object.keys(ivStore).length} sembol · son kayıt ${st.lastIvDay || "yok"}`,
         `AL kuralı: momentum en iyi %${Math.round((1 - CFG.MOM_TOP) * 100)} · zirvenin %${Math.round((1 - CFG.HI52_MAX) * 100)}–${Math.round((1 - CFG.HI52_MIN) * 100)} altı · hacim ≥ ${usd(CFG.MIN_DVOL / 1e6)}M`,
         `Opsiyon: yalnız alım · put ${OCFG.PUTS ? "açık" : "kapalı"} · çıkış ${OCFG.LONG_TP != null ? "+%" + Math.round(OCFG.LONG_TP * 100) : "hedefsiz"} / ${OCFG.LONG_SL != null ? "−%" + Math.round(OCFG.LONG_SL * 100) : "stopsuz"} / ${OCFG.LONG_DTE}g`,
-        "", fmtCalib(st.calib),
+        "", fmtFG(st.fg), "", fmtCalib(st.calib),
       ].join("\n"));
     }
   }
@@ -569,8 +594,9 @@ export async function main() {
   // --- SPY/QQQ KISA VADE CALL: 15:30 NY sonrası günde 1 (kapanışa yakın gir/çık) ---
   if (mins >= 930 || process.env.ETF_FORCE === "1") {
     const r = await ctx.r();
+    const fgNow = await getFG(st, true);
     const lines = await runEtf(st, {
-      today, closesFor: etfCloses,
+      today, closesFor: etfCloses, fg: fgNow?.fg ?? null,
       chainFor: async (sym, expTs = null) => expTs
         ? loadChain(sym, r, { minDte: 0, maxDte: 400, targets: [Math.max(0, (expTs - Date.now() / 1e3) / 86400)] })
         : loadChain(sym, r, { minDte: ETF_OPT.DTE, maxDte: ETF_OPT.DTE + 30, targets: [ETF_OPT.DTE + 2] }),

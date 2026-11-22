@@ -135,6 +135,19 @@ SPY ve QQQ) üç yukarı koşul: **VIX > 30** · **VIX dün ≥ +%10 & trend yuk
   düşüş sinyalinde ETF modülü ayrıca PUT bildirir.
 - `/sabah`: çağrıların karnesi (gün yukarı kapandı mı, hedef/stop görüldü mü). Tatil günleri Alpaca takviminden atlanır.
 
+## 😨 Korku & Açgözlülük endeksi (`spot/feargreed.mjs`)
+CNN'in veri uç noktası otomatik istekleri engelliyor (HTTP 418) — engel aşılmaz. Bunun yerine **CNN'in yayımladığı
+yöntemle** kendi endeksimiz: günlük geçmişi ücretsiz olan 4 bileşen — S&P 500 / 125g ortalama (momentum), VIX / 50g
+ortalama (ters), SPY − TLT 20g getiri (güvenli liman), HYG − IEF 20g getiri (riskli tahvil). Her bileşen son 252 güne
+göre yüzdelik sıra, endeks = ortalama (0 aşırı korku … 100 aşırı açgözlülük). Ölçüm (`research/feargreed.mjs`, 2008–2026,
+eğitim < 2017 ≤ test):
+- **Aşırı korku (< 25) → 5–10 gün yukarı:** 10 gün sonra SPY +%0.62 / +%0.73 (taban +%0.28 / +%0.53), QQQ +%0.76 /
+  +%1.01 (taban +%0.50 / +%0.77); yükselen oran tabanla benzer → avantaj ortalamada.
+- Aşırı açgözlülük (> 75): iki dönemde tutarsız → **satış/put sinyali olarak kullanılmaz**. 1 günlük etki tutarsız →
+  sabah gün içi skoruna katılmaz (yalnız gösterilir).
+- Kullanım: ETF modülünde **"😱 AŞIRI KORKU call"** (SPY/QQQ, ≥ 30 gün vade, delta ≈ 0.6): endeks ≥ 50'ye dönünce ya da
+  10 işlem günü sonra **KAPAT**. Sabah mesajı, `/etf`, `/durum` ve haftalık raporda endeks + bileşenleri. `FG_ETF=0` kapatır.
+
 ## SPY / QQQ kısa vade call ve put (yalnız ALIM — opsiyon satışı yok)
 **Call** (`spot/etfsignal.mjs`): kapanış > 200g ortalama **ve** RSI(2) < 5 (güçlü) / < 10 (normal) → **kapanış 5g
 ortalamanın üstüne çıkınca** ya da en çok 10 işlem günü sonra çık. Ölçüm (`research/etf.mjs`, eğitim < 2014 ≤ test):
