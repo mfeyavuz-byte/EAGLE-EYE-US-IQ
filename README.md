@@ -13,8 +13,9 @@ GitHub Actions üzerinde kendi kendine çalışır, sunucu gerekmez. Teknik moto
 | 5a | **Yön araştırması**: hangi sinyal rastgeleyi geçiyor → AL kuralı yeniden kuruldu | ✅ |
 | 5b | Opsiyon geriye dönük testi (Alpaca geçmiş opsiyon fiyatları) | ✅ kod · ⏳ çalıştırma |
 | — | Gerçekçi opsiyon karnesi · spot karnesi · haftalık rapor · haberler · olağandışı opsiyon hacmi | ✅ |
-| 2 | Temel analiz: SEC EDGAR (marj, büyüme, sulandırma) | ⏳ |
-| 4 | Sanal portföy (Alpaca paper) | ⏳ |
+| — | Spot çıkış planı · boyut + sektör sınırı · bilanço öncesi opsiyon çıkışı · `/takip` | ✅ |
+| 4 | Model portföy (Alpaca paper, `PAPER_TRADE=1` ile açılır) | ✅ |
+| 2 | Temel analiz: SEC EDGAR (marj, büyüme, sulandırma) | ⏳ (SEC iletişim bilgisi ister) |
 
 ## Spot — ne seçer, neden
 Seans boyunca 20 dk'da bir 1.331 hisse taranır; **yeni** seçimler gönderilir (günlük kota: 10 AL + 6 SAT,
@@ -25,6 +26,9 @@ kalanlar `/sinyaller`). Ortak şart: ort. işlem hacmi ≥ 50M$.
 - 52 haftalık zirvenin **%5–%25 altında** (geri çekilme var, çökmüş değil) · 200 günlük ortalamanın üstünde
 - fiyat ≥ $10 · teknik motor SAT demiyor · sıralama: momentum
 - Seviyeler ATR'den: stop 2.5·ATR altı, hedef 5·ATR üstü (R:R 2)
+- **Çıkış planı**: stop kırılınca, hedefe ulaşınca ya da **21 işlem günü** dolunca "📕 SPOT ÇIKIŞ" mesajı gelir
+- **Boyut**: stop'a kadar portföyün %1'i riske (`RISK_SPOT`), tek hisse en çok %10 (`MAX_POS`);
+  aynı gün aynı sektörden en çok 3 sinyal (`SEC_CAP`)
 
 **SAT = teyitli düşüş + zayıf momentum** (spotta çık / girme):
 - motor SAT · güven ≥ 80 · ADX ≥ 25 · haftalık trend AŞAĞI · SPY'dan zayıf · RSI ≥ 30 · momentum alt %30
@@ -73,7 +77,7 @@ Beklenti: Alımda oynaklık primini sen ödersin, orta ölçekli hisselerin opsi
 
 | Yapı | Kâr al | Zarar durdur | Süre |
 |---|---|---|---|
-| Long call / put | +%100 | primin %50'si | vadeye 21 gün |
+| Long call / put | +%100 | primin %50'si | vadeye 21 gün · **vade içinde bilanço varsa bilançodan 1 gün önce** |
 | *(OPT_LONG_ONLY=0)* Kredili | maks kârın %50'si | 2× kredi · kısa strike kırılırsa | vadeye 21 gün |
 | *(OPT_LONG_ONLY=0)* Borçlu spread | maks kârın %75'i | primin %50'si | vadeye 10 gün |
 
@@ -82,12 +86,19 @@ Beklenti: Alımda oynaklık primini sen ödersin, orta ölçekli hisselerin opsi
   tetiklenince **"📕 OPSİYON FİKRİ KAPAT"** mesajı gelir. İki bölüm: *gerçekçi* (kurallarla; simülasyonun tahminiyle
   kıyas) ve *model kalibrasyonu* (vadeye kadar tutulsaydı; POP/EV tahminiyle kıyas).
 - **`/spotkarne` — spot:** gönderilen her AL/SAT fiyat ve SPY ile kaydedilir; sinyal yönünde getiri ve SPY'a göre fark.
-- **Haftalık rapor:** Cuma 15:30 NY (TR 23:30) — haftanın ve son 30 günün spot sonuçları, opsiyon karnesi, açık fikirler.
+- **Haftalık rapor:** Cuma 15:30 NY (TR 23:30) — haftanın ve son 30 günün spot sonuçları, opsiyon karnesi, açık fikirler,
+  model portföy, takip listesi.
+- **Takip listesi (`/takip SEMBOL`):** sahip olduğun hisse için uyarı — bot SAT seçimi verirse, 200 günlük ortalama
+  aşağı kırılırsa, takipteki zirvesinden %8 geri çekilirse (`WATCH_TRAIL`).
+- **Model portföy (`/portfoy`):** repo → Settings → Secrets and variables → Actions → **Variables** → `PAPER_TRADE` = `1`.
+  Alpaca **paper** (sanal para) hesabında AL seçimlerini braket emirle alır (stop + hedef otomatik), 21 işlem gününde
+  kapatır. Yalnız hisse alımı; gerçek hesaba dokunmaz (uç nokta sabit `paper-api`). Gerçek dolumla "sinyalleri
+  uygulasaydım" sonucu.
 - **IV geçmişi:** her gün en likit 250 hisse + SPY/QQQ/IWM için IV30 (Gist `abd_ivhist.json`) → ~20 günde IV rank.
 
 ### Komutlar
 `/hisse NVDA` (seçim + faktörler + teknik + **son haberler**) · `/opsiyon AAPL` · `/sinyaller` · `/karne` ·
-`/spotkarne` · `/durum` · `/yardim`
+`/spotkarne` · `/takip SEMBOL` · `/birak SEMBOL` · `/takiplerim` · `/portfoy` · `/durum` · `/yardim`
 > Komutlar bot çalışırken okunur (seans içinde ~20 dk gecikmeyle).
 
 ## Geriye dönük test ve araştırma
@@ -126,7 +137,7 @@ DRY_RUN=1 FORCE=1 WEEKLY_FORCE=1 node bot/run.mjs                      # haftal�
 npm run universe                                 # evreni yeniden kur (spot/universe.json)
 ```
 Ayarlar (env) — spot: `MOM_TOP`, `HI52_MIN`, `HI52_MAX`, `MIN_PRICE_AL`, `MOM_SAT_MAX`, `MIN_CONF_SAT`, `MIN_ADX_SAT`,
-`MIN_RSI_SAT`, `MIN_DVOL`, `MAX_AL_DAY`, `MAX_SAT_DAY`, `CORE_N` · opsiyon: `OPT_EDGE_AL`, `OPT_EDGE_SAT`,
+`MIN_RSI_SAT`, `MIN_DVOL`, `MAX_AL_DAY`, `MAX_SAT_DAY`, `SEC_CAP`, `RISK_SPOT`, `MAX_POS`, `SPOT_HOLD`, `WATCH_TRAIL`, `CORE_N` · opsiyon: `OPT_EDGE_AL`, `OPT_EDGE_SAT`,
 `OPT_DIR_TRUST`, `OPT_MIN_EDGE`, `OPT_ACCOUNT`, `OPT_RISK`, `OPT_KELLY_FRAC`, `OPT_SIM_N`, `OPT_SIM_TOP`, `OPT_MIN_OI`,
 `OPT_MAX_SPREAD`, `OPT_SLIP`, `OPT_LONG_ONLY`, `OPT_INV`, `OPT_INV_HARD`, `IV_TOP`.
 
@@ -148,7 +159,8 @@ options/engine.mjs     yön → aday → simülasyon → Kelly → seçim
 options/backtest.mjs   opsiyon geriye dönük testi (Alpaca)
 options/ivhist.mjs     IV30 geçmişi (IV rank)      options/book.mjs   opsiyon karnesi (günlük değerleme, kurallar)
 options/format.mjs     Telegram mesajları
-bot/run.mjs            ana akış + komutlar + haftalık rapor     bot/spotbook.mjs  spot karnesi
+bot/run.mjs            ana akış + komutlar + haftalık rapor     bot/spotbook.mjs  spot karnesi + çıkış planı
+bot/watch.mjs          takip listesi                             bot/paper.mjs     model portföy (Alpaca paper)
 bot/state.mjs          Gist                                      bot/telegram.mjs  Telegram (parçalama, tekrar deneme)
 ```
 
