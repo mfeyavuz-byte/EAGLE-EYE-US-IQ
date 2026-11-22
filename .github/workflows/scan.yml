@@ -30,10 +30,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 355
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
-          node-version: "20"
+          node-version: "22"
+      - name: Birim testleri (bozuk kodla çalışma — hata alarmı tetiklenir)
+        run: npm test
       - name: Seans boyunca her 20 dk tara
         env:
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
@@ -58,3 +60,11 @@ jobs:
             sleep 1200
           done
           exit 0
+      - name: Hata alarmı
+        if: failure()
+        env:
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CHAT: ${{ secrets.TG_CHAT }}
+          WF_NAME: ${{ github.workflow }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node bot/alert.mjs

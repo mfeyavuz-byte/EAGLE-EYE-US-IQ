@@ -168,3 +168,12 @@ test("AL: hacimli sert düşüş sonrası momentum liderine girilmez", () => {
   assert.equal(passes({ ...base, shock: -0.03 }), true);
   assert.equal(passes({ ...base, shock: 0.12 }), true);
 });
+
+test("durum dosyası boyut koruması: yalnız kapanmış kayıtlar budanır", async () => {
+  const { trimState } = await import("../bot/state.mjs");
+  const pad = "x".repeat(200);
+  const st = { spotBook: [...Array.from({ length: 50 }, (_, i) => ({ sym: "C" + i, pad, closed: { d: "x" } })), ...Array.from({ length: 10 }, (_, i) => ({ sym: "O" + i, pad }))] };
+  const removed = trimState(st, 5000);
+  assert.ok(removed > 0 && JSON.stringify(st).length <= 5000 || st.spotBook.every(b => !b.closed));
+  assert.equal(st.spotBook.filter(b => !b.closed).length, 10);              // açık kayıtlar korunur
+});

@@ -32,8 +32,30 @@ export async function loadFiles(names) {
   } catch { return READ_FAILED; }
 }
 
+// BOYUT KORUMASI: durum dosyası LIMIT'i aşarsa en eski KAPANMIŞ kayıtlar budanır (açık pozisyonlara dokunulmaz).
+// Sıra: kapanmış spot sinyalleri → sonuçlanmış opsiyon fikirleri. Dönüş: silinen kayıt sayısı.
+export const STATE_LIMIT = 700e3;
+export function trimState(st, limit = STATE_LIMIT) {
+  let removed = 0;
+  const size = () => JSON.stringify(st).length;
+  for (const key of ["spotBook", "optBook"]) {
+    const arr = st[key];
+    if (!Array.isArray(arr)) continue;
+    while (size() > limit) {
+      const i = arr.findIndex(b => b.closed && (key === "spotBook" || b.settled));
+      if (i < 0) break;
+      arr.splice(i, 1); removed++;
+    }
+  }
+  return removed;
+}
+
 export async function saveFiles(files) {
   if (!gistEnabled()) return false;
+  for (const [n, o] of Object.entries(files)) {
+    const kb = JSON.stringify(o).length / 1e3;
+    if (kb > 900) console.error(`⚠ [Gist] ${n} ${kb.toFixed(0)} KB — 1 MB sınırına yakın`);
+  }
   try {
     const body = { files: Object.fromEntries(Object.entries(files).map(([n, o]) => [n, { content: JSON.stringify(o) }])) };
     const r = await fetch(`https://api.github.com/gists/${ID}`, { method: "PATCH", headers: { ...H, "Content-Type": "application/json" }, body: JSON.stringify(body) });

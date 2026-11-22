@@ -14,7 +14,7 @@ import { paperEnabled, runPaper, paperSummary } from "./paper.mjs";
 import { liveQuotes, alpacaEnabled, news } from "../data/alpaca.mjs";
 import { isMarketOpen, nyDate, nyParts, fmtTR } from "../data/market.mjs";
 import { riskFreeRate, fetchDaily, optionChain } from "../data/yahoo.mjs";
-import { loadFiles, saveFiles, READ_FAILED, gistEnabled, STATE_FILE, IVHIST_FILE } from "./state.mjs";
+import { loadFiles, saveFiles, READ_FAILED, gistEnabled, STATE_FILE, IVHIST_FILE, trimState } from "./state.mjs";
 import { sendTG, fetchCommands } from "./telegram.mjs";
 import { analyzeOptions, OCFG } from "../options/engine.mjs";
 import { fmtAnalysis, fmtDailyIdeas } from "../options/format.mjs";
@@ -412,6 +412,8 @@ export async function main() {
     console.log(`IV geçmişi: ${n}/${top.length} kaydedildi · ${((Date.now() - t2) / 1e3).toFixed(0)}s`);
   }
 
+  const trimmed = trimState(st);
+  if (trimmed) console.log(`Durum dosyası budandı: ${trimmed} eski kapanmış kayıt silindi.`);
   await saveFiles(ivDirty ? { [STATE_FILE]: st, [IVHIST_FILE]: ivStore } : { [STATE_FILE]: st });
   console.log(`Bitti · ${((Date.now() - t0) / 1e3).toFixed(1)}s`);
   return 0;

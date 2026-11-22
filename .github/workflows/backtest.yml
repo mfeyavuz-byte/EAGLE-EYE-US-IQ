@@ -20,10 +20,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
-          node-version: "20"
+          node-version: "22"
       - name: Geriye dönük test
         env:
           ALPACA_KEY_ID: ${{ secrets.ALPACA_KEY_ID }}
@@ -33,6 +33,7 @@ jobs:
           BT_START: ${{ inputs.start }}
           BT_OUT: trades.json
         run: |
+          set -o pipefail
           node options/backtest.mjs | tee out.txt
           { echo '```'; sed -n '/^SONUÇ/,$p' out.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: Sonucu Telegram'a gönder
@@ -43,8 +44,17 @@ jobs:
           BT_INFO: "Evren ${{ inputs.n }} hisse · her ${{ inputs.step }} işlem günü · ${{ inputs.start }} sonrası · commit ${{ github.sha }}"
         run: node options/send-report.mjs out.txt
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: opsiyon-backtest
           path: |
             out.txt
             trades.json
+      - name: Hata alarmı
+        if: failure()
+        env:
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CHAT: ${{ secrets.TG_CHAT }}
+          WF_NAME: ${{ github.workflow }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node bot/alert.mjs
