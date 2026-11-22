@@ -28,6 +28,10 @@ export const CFG = {
   HI52_MAX: env("HI52_MAX", 0.95),
   HI52_MIN: env("HI52_MIN", 0.75),
   MIN_PRICE_AL: env("MIN_PRICE_AL", 10),
+  // Hacimli sert düşüş sonrası momentum liderine girme: son 10 günde hacim ≥ 3× ort. ve günlük ≤ −%5 olan AL
+  // adayları 21 günde −%0.4 / −%2.2 (isabet %32 / %36) → elenir. (Bilanço sonrası yukarı trend etkisi ise bu
+  // veride tutarsızdı → kural olarak eklenmedi.)
+  SHOCK_DOWN: env("SHOCK_DOWN", -0.05),
   // SAT = motorun teyitli SAT'ı + momentumu zayıf (alt %30): 21 günde −%1.3 / −%1.1 (doğru yön).
   MOM_SAT_MAX: env("MOM_SAT_MAX", 0.3),
   CONC: env("CONC", 8),
@@ -102,6 +106,15 @@ export async function analyze(sym, { live = null, spyRet60 = 0, daily: pre = nul
   // Faktörler: 12 aylık momentum (son ay hariç), 52 haftalık zirveye uzaklık, 200 günlük ortalamaya uzaklık
   const n = daily.length;
   const mom12 = n >= 253 && daily[n - 253].close > 0 ? daily[n - 22].close / daily[n - 253].close - 1 : null;
+  // Hacimli şok (bilanço/haber vekili): son 10 günde hacim ≥ 3× 50g ortalama olan en büyük günlük hareket
+  let shock = 0;
+  if (n >= 70) {
+    let v50 = 0; for (let j = n - 61; j < n - 11; j++) v50 += daily[j].volume || 0; v50 /= 50;
+    for (let j = n - 10; j < n; j++) {
+      const dr = daily[j].close / daily[j - 1].close - 1;
+      if (v50 > 0 && (daily[j].volume || 0) >= 3 * v50 && Math.abs(dr) > Math.abs(shock)) shock = dr;
+    }
+  }
   let hi = 0; for (let j = Math.max(0, n - 252); j < n; j++) hi = Math.max(hi, daily[j].high || daily[j].close);
   let s200 = 0; if (n >= 200) { for (let j = n - 200; j < n; j++) s200 += daily[j].close; s200 /= 200; }
   const a = {
@@ -113,6 +126,7 @@ export async function analyze(sym, { live = null, spyRet60 = 0, daily: pre = nul
     ret60: +ret60.toFixed(1), rs60: +(ret60 - spyRet60).toFixed(1),   // SPY'a göre göreli güç
     mom12: mom12 != null ? +mom12.toFixed(4) : null, hi52: hi ? +(price / hi).toFixed(4) : null,
     a200: s200 ? +(price / s200 - 1).toFixed(4) : null,
+    shock: +shock.toFixed(4),
   };
   if (MOM_CUTS && a.mom12 != null) a.momRank = a.mom12 >= MOM_CUTS.top ? 0.9 : a.mom12 <= MOM_CUTS.low ? 0.1 : 0.5;
   classify(a);   // opsiyon motoru yalnızca filtreyi geçen sinyale yön verir
@@ -125,6 +139,7 @@ export function pickOf(a) {
   const eng = a.engSignal ?? a.signal;
   if (a.momRank == null) return null;                                // sıra bilinmeden seçim yok
   if (eng !== "SAT" && a.momRank >= CFG.MOM_TOP && a.hi52 != null && a.hi52 < CFG.HI52_MAX && a.hi52 >= CFG.HI52_MIN &&
+      !((a.shock ?? 0) <= CFG.SHOCK_DOWN) &&
       (a.a200 ?? -1) > 0 && !(a.price < CFG.MIN_PRICE_AL)) return "AL";
   if (eng === "SAT") {
     // SAT: teyitli düşüş — haftalık trend AŞAĞI, güçlü trend, SPY'dan zayıf, henüz aşırı satılmamış, momentum zayıf.

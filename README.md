@@ -24,7 +24,7 @@ kalanlar `/sinyaller`). Ortak şart: ort. işlem hacmi ≥ 50M$.
 **AL = momentum lideri geri çekilmede** (ufuk ~1 ay):
 - 12 aylık momentum (son ay hariç) evrenin **en iyi %20'sinde**
 - 52 haftalık zirvenin **%5–%25 altında** (geri çekilme var, çökmüş değil) · 200 günlük ortalamanın üstünde
-- fiyat ≥ $10 · teknik motor SAT demiyor · sıralama: momentum
+- fiyat ≥ $10 · teknik motor SAT demiyor · son 10 günde hacimli sert düşüş (≤ −%5, hacim ≥ 3×) yok · sıralama: momentum
 - Seviyeler ATR'den: stop 2.5·ATR altı, hedef 5·ATR üstü (R:R 2)
 - **Çıkış planı**: stop kırılınca, hedefe ulaşınca ya da **21 işlem günü** dolunca "📕 SPOT ÇIKIŞ" mesajı gelir
 - **Boyut**: stop'a kadar portföyün %1'i riske (`RISK_SPOT`), tek hisse en çok %10 (`MAX_POS`);
@@ -42,6 +42,8 @@ Eğitim (< Mart 2025) ve test (≥ Mart 2025) dönemleri ayrı; yalnızca **ikis
 | Eski motor AL'i (BIST'ten gelen) | −%0.5 | −%0.1 |
 | **Yeni AL** (momentum lideri geri çekilmede) | **+%2.1** | **+%3.7** |
 | SAT (teyitli düşüş + zayıf momentum) — negatif = doğru | −%1.3 | −%1.1 |
+| AL adayı + son 10 günde hacimli sert düşüş → **elenir** | −%0.4 (isabet %32) | −%2.2 (isabet %36) |
+| Bilanço sonrası yukarı trend (hacimli +%5 şok) — *eklenmedi, tutarsız* | +%0.5 | +%1.0 (t ≤ 1) |
 
 Dürüst notlar: isabet ~%50, **medyan** fazla getiri yalnız +%0.3 → avantaj büyük kazananlardan gelir;
 t-istatistiği ~1–1.5 (güçlü değil); evren bugünün likit hisseleri (hayatta kalan yanlılığı). Canlıda

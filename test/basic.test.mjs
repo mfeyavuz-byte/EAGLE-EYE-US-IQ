@@ -162,3 +162,9 @@ test("takip listesi uyarıları ve model portföy boyutu", async () => {
   assert.equal(qtyFor(100000, 50, 49, 0.01, 0.1), 200);                      // %10 üst sınırı: $10k / $50
   assert.equal(qtyFor(100000, 50, 55, 0.01, 0.1), 0);                        // stop fiyatın üstünde → alım yok
 });
+
+test("AL: hacimli sert düşüş sonrası momentum liderine girilmez", () => {
+  assert.equal(passes({ ...base, shock: -0.07 }), false);
+  assert.equal(passes({ ...base, shock: -0.03 }), true);
+  assert.equal(passes({ ...base, shock: 0.12 }), true);
+});
