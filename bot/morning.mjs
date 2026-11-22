@@ -10,6 +10,7 @@
 // Hedef/stop: tahmini açılış ± 0.5 × beklenen günlük hareket (VIX/√252; QQQ ×1.25). Skor ≥ 1 günlerde hedefe gün içinde
 // ulaşma ~%48, stop'a ~%41.
 import { rsiSeries, smaAt } from "../spot/etfsignal.mjs";
+import { normCdf } from "../options/bs.mjs";
 
 export const MORNING = { START: 450, END: 570, EM_K: 0.5 };   // 07:30–09:29 NY
 export const FUT = { SPY: "ES=F", QQQ: "NQ=F" };
@@ -40,6 +41,28 @@ export function levels(estOpen, vix, sym) {
 const pc = v => (v >= 0 ? "+" : "") + (v * 100).toFixed(2) + "%";
 const trD = d => `${d.slice(8, 10)}.${d.slice(5, 7)}`;
 
+// Ölçülmüş günlük yön avantajı (açılış→kapanış, ondalık): skor 1 / skor ≥ 2
+const EDGE = { SPY: { 1: 0.0008, 2: 0.0015 }, QQQ: { 1: 0.0013, 2: 0.0015 } };
+// Vade seçenekleri: [etiket, en az gün, en çok gün] (loadChain dte'si: vadeye kalan takvim günü, yuvarlanmış)
+export const TENORS = [["0DTE (bugün)", 0, 0], ["1DTE (yarın)", 1, 3], ["Haftalık (~1 hafta)", 4, 9]];
+
+// Alınan opsiyonun vadede kâr olasılığı: P(S_T başabaşın ötesinde), log-normal, kayma mu (yıllık), sigma (yıllık)
+export function popLong(type, S, K, prem, T, sigma, mu = 0) {
+  const be = type === "C" ? K + prem : K - prem;
+  if (!(be > 0) || !(T > 0) || !(sigma > 0) || !(S > 0)) return null;
+  const d = (Math.log(S / be) + (mu - sigma * sigma / 2) * T) / (sigma * Math.sqrt(T));
+  return type === "C" ? normCdf(d) : normCdf(-d);
+}
+// Zincirden vade penceresindeki ilk vadede |delta| hedefe en yakın kotasyonlu kontrat. prem = orta + %30 spread
+export function pickTenor(chain, lo, hi, type, delta) {
+  const ex = (chain?.expiries || []).filter(e => e.dte >= lo && e.dte <= hi).sort((a, b) => a.dte - b.dte)[0];
+  if (!ex) return null;
+  const c = ((type === "P" ? ex.puts : ex.calls) || []).filter(o => o.delta != null && o.mid > 0 && o.ask >= o.bid)
+    .sort((a, b) => Math.abs(Math.abs(a.delta) - delta) - Math.abs(Math.abs(b.delta) - delta))[0];
+  if (!c) return null;
+  return { ex, c, S: chain.S, prem: +(c.mid + 0.3 * (c.ask - c.bid)).toFixed(2), expD: new Date(ex.exp * 1e3).toISOString().slice(0, 10) };
+}
+
 // deps: { today, closesFor(sym) → tamamlanmış kapanışlar, vixCloses(), futQuote(sym) → {price, prevClose},
 //         contractFor(sym, type) → { K, exp (iso), dte, delta, mid, spreadPct } | null, headlines() → [str] }
 // Dönüş: { text, calls: [kayıt] }
@@ -69,10 +92,32 @@ export async function buildMorning(deps) {
     const lv = levels(estOpen, v, sym);
     L.push(`📈 CALL (gün içi) · skor ${s.score}/3 · geçmiş: ${HIST[sym][Math.min(2, s.score)]} (1993–2026)`);
     L.push(`HEDEF ${sym} $${lv.target} (+${(MORNING.EM_K * lv.em * 100).toFixed(2)}%) · STOP $${lv.stop} (−${(MORNING.EM_K * lv.em * 100).toFixed(2)}%) · hiçbiri olmazsa KAPANIŞTA çık`);
-    const c = await deps.contractFor(sym, "C").catch(() => null);
-    L.push(c ? `Kontrat: AL ${c.K}C · vade ${trD(c.exp)} (${c.dte}g) · delta ${c.delta.toFixed(2)} · son ~$${c.mid.toFixed(2)} — açılışta canlı fiyatı kontrol et`
-      : `Kontrat: ATM call (${Math.round(estOpen)}C), en yakın ≥2 günlük vade — açılış öncesi kotasyon yok, açılışta fiyatı kontrol et`);
-    calls.push({ d: deps.today, sym, score: s.score, estOpen, target: lv.target, stop: lv.stop, K: c?.K ?? null, exp: c?.exp ?? null });
+    // Vade seçenekleri: 0DTE · 1DTE · haftalık — kâr olasılığı (vadede başabaşın ötesi; modelin ölçülmüş yön avantajıyla)
+    const chain = deps.chainFor ? await deps.chainFor(sym).catch(() => null) : null;
+    const mu = EDGE[sym][Math.min(2, s.score)] * 252, sigV = (v / 100) * (sym === "QQQ" ? 1.25 : 1);
+    let first = null;
+    for (const [lab, lo, hi] of TENORS) {
+      const t = pickTenor(chain, lo, hi, "C", 0.5);
+      if (!t) { L.push(`• ${lab}: uygun kotasyon yok — açılışta ATM call (${Math.round(estOpen)}C) fiyatını kontrol et`); continue; }
+      first ||= t;
+      const pop = popLong("C", estOpen, t.c.K, t.prem, Math.max(t.ex.T, 1 / 365), t.c.iv || sigV, mu);
+      L.push(`• ${lab}: AL ${t.c.K}C · vade ${trD(t.expD)} · ~$${t.prem.toFixed(2)} · başabaş $${(t.c.K + t.prem).toFixed(2)} · kâr olasılığı ~%${pop != null ? Math.round(pop * 100) : "?"}`);
+    }
+    L.push(`  ↳ 0DTE en ucuz ama en riskli (zaman değeri gün içinde erir); haftalık daha affedici. Hedefte sat, stop'ta ya da prim −%50'de çık.`);
+    calls.push({ d: deps.today, sym, score: s.score, estOpen, target: lv.target, stop: lv.stop, K: first?.c.K ?? null, exp: first?.expD ?? null });
+  }
+  // AŞIRI KORKU (Korku & Açgözlülük < 25): 2–3 haftalık call (5–10 günlük etki ölçülmüş, gün içi değil)
+  if (deps.fg != null && deps.fg < 25) {
+    L.push("", `😱 AŞIRI KORKU (${deps.fg}/100) — 2–3 hafta vadeli CALL (5–10 gün tut; endeks 50'ye dönünce çık)`);
+    for (const sym of ["SPY", "QQQ"]) {
+      const chain = deps.chainFor ? await deps.chainFor(sym).catch(() => null) : null;
+      const t = pickTenor(chain, 14, 25, "C", 0.6);
+      if (!t) { L.push(`• ${sym}: uygun kotasyon yok`); continue; }
+      const sig = t.c.iv || (vix.at(-1) / 100) * (sym === "QQQ" ? 1.25 : 1);
+      const pop = popLong("C", t.S, t.c.K, t.prem, t.ex.T, sig, 0.09);
+      L.push(`• ${sym}: AL ${t.c.K}C · vade ${trD(t.expD)} (${t.ex.dte}g) · ~$${t.prem.toFixed(2)} · başabaş $${(t.c.K + t.prem).toFixed(2)} · vadede kâr olasılığı ~%${pop != null ? Math.round(pop * 100) : "?"}`);
+    }
+    L.push("  ↳ Geçmiş (2008–2026): aşırı korkuda 10 gün sonra SPY ort. +%0.6–0.7, QQQ +%0.8–1.0 (taban +%0.3–0.8).");
   }
   L.push("", "PUT notu: açılış öncesi bilgilerle düşüş yönünde ölçülmüş avantaj yok (test döneminde zarar) → sabah put önerilmez. Gün içi düşüş sinyali oluşursa ETF modülü ayrıca PUT bildirir.");
   const h = await deps.headlines().catch(() => []);

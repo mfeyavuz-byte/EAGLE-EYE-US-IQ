@@ -102,6 +102,14 @@ Beklenti: Alımda oynaklık primini sen ödersin, orta ölçekli hisselerin opsi
   - **aylık rapor** yeni ayın ilk işlem günü 10:00 NY sonrası (önceki ay),
   - **3 aylık rapor** Ocak/Nisan/Temmuz/Ekim'in ilk işlem günü (önceki çeyrek).
   Rapor: dönem getirisi, SPY ve fark, en büyük düşüş, kapanan işlemler, en iyi/en kötü, açık pozisyonlar.
+- **Opsiyon model portföyleri (`bot/optmodel.mjs`) — üç vade kolu, her biri $25.000, yalnız ALIM:**
+  - **Haftalık** (vade 4–10 gün, delta ≈ 0.5): sabah SPY/QQQ CALL çağrıları · vadeden ~1 işlem günü önce çıkış
+  - **Aylık** (vade 35–50 gün, delta ≈ 0.6): ETF fırsatları (RSI2 call, aşırı korku call, put) · vadeye 21 gün kala çıkış
+  - **3 aylık** (vade 80–110 gün, delta ≈ 0.6): günün spot AL'leri (call) ve SAT'ı (put), likit olanlardan günde en çok
+    2 call + 1 put · vadeye 30 gün kala çıkış
+  - Ortak: pozisyon başına kolun %10'u (tek kontrat aşarsa %20'ye kadar 1 adet), en çok 8 açık, zarar durdurma −%50,
+    kâr hedefi yok (test #4), giriş/çıkış orta ± %30 spread, günde bir canlı zincirle değerleme. İşlem mesajı her
+    alım/satımda; kollar haftalık / aylık / 3 aylık **model portföy raporlarına** eklenir; `/portfoy`'da görünür.
 - **Alpaca paper (isteğe bağlı):** Variables → `PAPER_TRADE` = `1` → aynı AL'leri Alpaca **paper** hesabında braket
   emirle uygular (gerçek dolum); gerçek hesaba dokunmaz (uç nokta sabit `paper-api`).
 - **0DTE/1DTE:** eklenmedi — yalnız alımla %90 kâr olasılığı matematiksel olarak mümkün değil (ATM'de başabaş fiyatın
@@ -131,6 +139,10 @@ SPY ve QQQ) üç yukarı koşul: **VIX > 30** · **VIX dün ≥ +%10 & trend yuk
   açılış ± 0.5 × beklenen günlük hareket (VIX/√252; QQQ ×1.25); hiçbiri olmazsa kapanışta çık; ≥ 2 günlük vadeli
   ~0.5 delta call önerilir.
 - Skor 0 (günlerin ~%84'ü) → **NÖTR**, işlem önerilmez (gün içi yön geçmişte yazı-tura).
+- CALL günlerinde **üç vade seçeneği**: **0DTE** (bugün), **1DTE** (yarın), **haftalık** (~1 hafta), her biri ATM'ye yakın
+  (delta ≈ 0.5) kontrat, fiyat (orta + %30 spread), başabaş ve **vadede kâr olasılığı** (log-normal; kontratın IV'si +
+  ölçülmüş gün içi avantaj). Yalnız alımda bu olasılık tipik olarak %30–45'tir — %90 değil; mesaj bunu açık yazar.
+- **Aşırı korku** (Korku & Açgözlülük < 25) varsa ayrıca **2–3 hafta vadeli call** (delta ≈ 0.6) önerisi ve kâr olasılığı.
 - **Sabah put önerilmez**: açılış öncesi bilgiyle düşüş yönünde ölçülmüş avantaj yok (test döneminde zarar). Gün içi
   düşüş sinyalinde ETF modülü ayrıca PUT bildirir.
 - `/sabah`: çağrıların karnesi (gün yukarı kapandı mı, hedef/stop görüldü mü). Tatil günleri Alpaca takviminden atlanır.

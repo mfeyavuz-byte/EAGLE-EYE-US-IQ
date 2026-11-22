@@ -26,7 +26,10 @@ function enrich(list, type, S, T, r, q) {
 // Hangi vadeler yüklenecek: ön (≥7g, analiz), işlem penceresi [minDte,maxDte] (en çok 3), arka (60–120g, vade yapısı).
 // targets verilirse pencereden her hedef güne en yakın vade seçilir (yayılım: kısa/orta/uzun).
 export function pickExpiries(exps, nowSec, { minDte = 21, maxDte = 60, analyticsOnly = false, targets = null } = {}) {
-  const withDte = exps.map(e => ({ e, dte: (e - nowSec) / 86400 })).filter(x => x.dte >= 5);
+  // Varsayılan: 5 günden kısa vadeler atlanır. minDte < 5 istenirse (0DTE/1DTE) bugünün vadesi de dahil edilir
+  // (Yahoo vade damgası 00:00 UTC → seans içinde dte negatif görünür; −0.75 güne kadar kabul).
+  const lo = minDte < 5 ? Math.max(-0.75, minDte - 0.75) : 5;
+  const withDte = exps.map(e => ({ e, dte: (e - nowSec) / 86400 })).filter(x => x.dte >= lo);
   const pick = new Set();
   const front = withDte.find(x => x.dte >= 7);
   if (front) pick.add(front.e);

@@ -23,6 +23,7 @@ import { aiComments, aiItem, AI_MODEL } from "./ai.mjs";
 import { analyzeOptions, OCFG, setEdges } from "../options/engine.mjs";
 import { calibrate, fmtCalib } from "./calib.mjs";
 import { initModel, stepModel, equity, fmtModel, dueReports, prevMonthEnd, prevQuarterEnd, shiftDays, MCFG } from "./model.mjs";
+import { initOptModel, queue, enterPending, markAndExit, fmtOptModel, fmtOptTrades } from "./optmodel.mjs";
 import { runEtf, fmtEtfBook, fmtEtfState, ETF_OPT } from "./etf.mjs";
 import { etfState, ETFS_FAST } from "../spot/etfsignal.mjs";
 import { loadChain } from "../options/chain.mjs";
@@ -173,24 +174,23 @@ async function morningStep(st, ctx) {
   if (!force && (wd === "Sat" || wd === "Sun" || mins < MORNING.START || mins >= MORNING.END || st.morning.day === today)) return;
   if (!force && (await isTradingDay(today)) === false) { st.morning.day = today; console.log("Sabah: bugün işlem günü değil."); return; }
   const r = await ctx.r();
+  const fgNow = await getFG(st);
+  const chains = {};                                               // ETF başına tek zincir (0DTE…~3 hafta)
   const { text, calls } = await buildMorning({
     today,
     closesFor: s => completedCloses(s, today),
     vixCloses: () => completedCloses("^VIX", today),
     futQuote: s => quoteNow(s),
-    contractFor: async (sym, type) => {
-      const ch = await loadChain(sym, r, { minDte: 2, maxDte: 12, targets: [3, 7] });
-      const ex = (ch?.expiries || []).filter(e => e.dte >= 2).sort((a, b) => a.dte - b.dte)[0];
-      const c = ((type === "P" ? ex?.puts : ex?.calls) || []).filter(o => o.delta != null && o.mid > 0)
-        .sort((a, b) => Math.abs(Math.abs(a.delta) - 0.5) - Math.abs(Math.abs(b.delta) - 0.5))[0];
-      return c ? { K: c.K, exp: new Date(ex.exp * 1e3).toISOString().slice(0, 10), dte: ex.dte, delta: c.delta, mid: c.mid, spreadPct: c.spreadPct } : null;
-    },
+    chainFor: async sym => (chains[sym] ??= await loadChain(sym, r, { minDte: 0, maxDte: 25, targets: [0, 1, 7, 18] })),
     headlines: async () => (await news("SPY", 4)).map(n => n.headline),
-    fearGreed: async () => fmtFG(await getFG(st)),
+    fearGreed: async () => fmtFG(fgNow),
+    fg: fgNow?.fg ?? null,
   });
   if (await sendTG(text, { buttons: [[{ text: "⚡ SPY/QQQ durumu", data: "/etf" }, { text: "🌅 Sabah karnesi", data: "/sabah" }]] })) {
     st.morning.day = today;
     st.morning.book.push(...calls);
+    st.om ||= initOptModel(today);
+    for (const c of calls) queue(st.om, today, "W", c.sym, "C", `sabah skor ${c.score}`);   // haftalık kol
     if (st.morning.book.length > 400) st.morning.book.splice(0, st.morning.book.length - 400);
   }
 }
@@ -314,7 +314,7 @@ async function handleCommands(st, ivStore, ctx) {
       const today = nyDate();
       const txt = st.model ? fmtModel(st.model, "💼 MODEL PORTFÖY — son 7 gün", shiftDays(today, -7)) : "Model portföy ilk tarama gününde başlar.";
       const paper = await paperSummary(st);
-      await sendTG(txt + (paper ? "\n\n" + paper : ""));
+      await sendTG(txt + "\n\n" + fmtOptModel(st.om, shiftDays(today, -7)) + (paper ? "\n\n" + paper : ""));
     } else if (cmd === "/spotkarne") {
       const today = nyDate();
       await sendTG(fmtSpotReport(spotScored(st), daysAgo(today, 30), "📈 SPOT SİNYAL KARNESİ — son 30 gün") +
@@ -465,6 +465,9 @@ export async function main() {
     if (await sendTG(m, { buttons: Array.from({ length: Math.ceil(btn.length / 4) }, (_, k) => btn.slice(k * 4, k * 4 + 4)) })) {
       st.lastHeaderDay = today;
       logSignals((st.spotBook ||= []), fresh, today, spyPx);           // canlı spot karnesi
+      st.om ||= initOptModel(today);                                     // 3 aylık kol: en iyi 2 AL (call) + en iyi SAT (put)
+      fresh.filter(x => x.signal === "AL").slice(0, 4).forEach(x => queue(st.om, today, "Q", x.sym, "C", "spot AL"));   // likit olan ilk 2 alınır
+      fresh.filter(x => x.signal === "SAT").slice(0, 2).forEach(x => queue(st.om, today, "Q", x.sym, "P", "spot SAT"));  // likit olan ilk 1 alınır
     } else {
       // Gönderilemeyen sinyaller "gönderildi" sayılmaz → sonraki run'da tekrar denenir (kaybolmaz).
       for (const s of fresh) {
@@ -501,11 +504,11 @@ export async function main() {
       const pxOf = s => px.get(s);
       if (out.includes("monthly") || process.env.MODEL_REPORT_FORCE === "1") {
         const end = prevMonthEnd(today);
-        if (await sendTG(fmtModel(st.model, `📆 MODEL PORTFÖY — AYLIK RAPOR (${end.slice(0, 7)})`, prevMonthEnd(end), pxOf, end))) st.model.lastMonthly = ym;
+        if (await sendTG(fmtModel(st.model, `📆 MODEL PORTFÖY — AYLIK RAPOR (${end.slice(0, 7)})`, prevMonthEnd(end), pxOf, end) + "\n\n" + fmtOptModel(st.om, prevMonthEnd(end), end))) st.model.lastMonthly = ym;
       }
       if (out.includes("quarterly") || process.env.MODEL_REPORT_FORCE === "1") {
         const end = prevQuarterEnd(today);
-        if (await sendTG(fmtModel(st.model, `🗓 MODEL PORTFÖY — 3 AYLIK RAPOR (${end.slice(0, 7)} sonu)`, prevQuarterEnd(end), pxOf, end))) st.model.lastQuarterly = q;
+        if (await sendTG(fmtModel(st.model, `🗓 MODEL PORTFÖY — 3 AYLIK RAPOR (${end.slice(0, 7)} sonu)`, prevQuarterEnd(end), pxOf, end) + "\n\n" + fmtOptModel(st.om, prevQuarterEnd(end), end))) st.model.lastQuarterly = q;
       }
     }
   }
@@ -587,7 +590,7 @@ export async function main() {
     await sendTG(weeklyReport(st, today, await paperSummary(st)));
     if (st.model) {
       const px = new Map(all.map(a => [a.sym, a.price]));
-      await sendTG(fmtModel(st.model, `📊 MODEL PORTFÖY — HAFTALIK RAPOR (${today})`, shiftDays(today, -7), s => px.get(s)));
+      await sendTG(fmtModel(st.model, `📊 MODEL PORTFÖY — HAFTALIK RAPOR (${today})`, shiftDays(today, -7), s => px.get(s)) + "\n\n" + fmtOptModel(st.om, shiftDays(today, -7)));
     }
   }
 
@@ -602,6 +605,25 @@ export async function main() {
         : loadChain(sym, r, { minDte: ETF_OPT.DTE, maxDte: ETF_OPT.DTE + 30, targets: [ETF_OPT.DTE + 2] }),
     });
     for (const l of lines) await sendTG(l + `\n\n${DISCLAIMER}`, { buttons: [[{ text: "⚡ SPY/QQQ durumu", data: "/etf" }]] });
+    st.om ||= initOptModel(today);                                       // aylık kol: bugün açılan ETF fırsatları
+    for (const p of Object.values(st.etf?.pos || {})) if (p.d === today && !p.omq) { queue(st.om, today, "M", p.sym, p.type || "C", `ETF ${p.kind || "rsi"}`); p.omq = true; }
+  }
+
+  // --- OPSİYON MODEL PORTFÖYLERİ (haftalık / aylık / 3 aylık kol): girişler her turda, değerleme+çıkış günde 1 ---
+  if (st.om && (open || FORCE)) {
+    const r = await ctx.r();
+    const bought = st.om.pending.length ? await enterPending(st.om, today, (sym, lo, hi) => loadChain(sym, r, { minDte: lo, maxDte: hi, targets: [(lo + hi) / 2] })) : [];
+    let sold = [];
+    if ((mins >= 900 && st.om.markDay !== today) || process.env.MARK_FORCE === "1") {
+      st.om.markDay = today;
+      sold = await markAndExit(st.om, today, async p => {
+        const c = await optionChain(p.sym, p.expTs);
+        if (!c || c.exp !== p.expTs) return null;
+        const o = (p.type === "P" ? c.puts : c.calls).find(x => x.sym === p.occ) || (p.type === "P" ? c.puts : c.calls).find(x => x.strike === p.K);
+        return o && o.bid >= 0 && o.ask > 0 ? { mid: (o.bid + o.ask) / 2, bid: o.bid, ask: o.ask } : null;
+      });
+    }
+    if (bought.length || sold.length) await sendTG(fmtOptTrades(bought, sold));
   }
 
   // --- IV geçmişi: günde 1 (15:00 NY sonrası) → IV rank zamanla oluşur ---

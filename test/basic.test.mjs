@@ -255,3 +255,31 @@ test("model portföy: slot sınırı, çıkışlar, dönem getirisi, rapor zaman
   assert.equal(M.prevQuarterEnd("2026-11-15"), "2026-09-30");
   assert.match(M.fmtModel(m, "T", "2026-11-02"), /Getiri .* SPY \+2\.00%/);
 });
+
+test("opsiyon model portföyleri: kuyruk, giriş, −%50 stop, vade çıkışı, rapor", async () => {
+  const O = await import("../bot/optmodel.mjs");
+  const om = O.initOptModel("2026-11-23");
+  O.queue(om, "2026-11-23", "W", "SPY", "C", "sabah"); O.queue(om, "2026-11-23", "W", "SPY", "C", "sabah");   // tekrar yok
+  O.queue(om, "2026-11-22", "M", "QQQ", "C", "eski");                                                          // bayat
+  assert.equal(om.pending.length, 2);
+  const now = Date.parse("2026-11-23T15:00:00Z"), expTs = Math.floor(Date.parse("2026-11-30T00:00:00Z") / 1e3);
+  const chain = { expiries: [{ exp: expTs, dte: 7, calls: [{ K: 690, delta: 0.52, mid: 5, bid: 4.9, ask: 5.1, liquid: true, sym: "SPY261130C00690000" }], puts: [] }] };
+  const b = await O.enterPending(om, "2026-11-23", async () => chain);
+  assert.equal(b.length, 1); assert.equal(om.pending.length, 0);
+  const p = om.sleeves.W.pos[0];
+  assert.equal(p.n, Math.floor(2500 / (5.03 * 100)));                                                           // %10 bütçe ($25k kol)
+  // pahalı kontrat: %10 bütçeyi aşan ama kolun %20'sini aşmayan tek kontrat alınır
+  const om2 = O.initOptModel("2026-11-23"); O.queue(om2, "2026-11-23", "M", "SPY", "C", "x");
+  const pricey = { expiries: [{ exp: expTs, dte: 40, calls: [{ K: 690, delta: 0.6, mid: 40, bid: 39.9, ask: 40.1, liquid: true, sym: "Y" }], puts: [] }] };
+  assert.equal((await O.enterPending(om2, "2026-11-23", async () => pricey))[0].n, 1);
+  // değer yarıya düştü → zarar durdur
+  const s1 = await O.markAndExit(om, "2026-11-24", async () => ({ mid: 2.4, bid: 2.35, ask: 2.45 }), now + 864e5);
+  assert.equal(s1.length, 1); assert.match(s1[0].why, /zarar durdur/);
+  assert.equal(om.sleeves.W.pos.length, 0);
+  assert.match(O.fmtOptModel(om, "2026-11-20"), /Haftalık .* kapanan 1/);
+  // vade çıkışı: haftalık kolda vadeye 1 gün kala
+  O.queue(om, "2026-11-25", "W", "SPY", "C", "sabah");
+  await O.enterPending(om, "2026-11-25", async () => chain);
+  const s2 = await O.markAndExit(om, "2026-11-29", async () => ({ mid: 5.2, bid: 5.1, ask: 5.3 }), Date.parse("2026-11-29T15:00:00Z"));
+  assert.equal(s2.length, 1); assert.match(s2[0].why, /vade yaklaştı/);
+});
