@@ -43,10 +43,12 @@ export const OCFG = {
   // (Not: ilk opsiyon testinde SAT → put boğa piyasasında zarardaydı; canlı karne ve kalibrasyon bunu izler.)
   // OPT_PUTS=0 ile kapatılabilir.
   PUTS: process.env.OPT_PUTS !== "0",
-  // Long opsiyon çıkış kuralı (opsiyon geriye dönük testindeki varyant karşılaştırmasıyla seçilir).
-  // LONG_TP: prim getirisi (1 = +%100; "none" = kâr hedefi yok) · LONG_SL: prim kaybı (0.5 = −%50; "none" = stop yok)
+  // Long opsiyon çıkış kuralı — opsiyon geriye dönük testi #4 (598 işlem, gerçek opsiyon fiyatları, maliyet %3):
+  //   +%100 / −%50 / 21g (eski) −%6.1 prim getirisi · KÂR HEDEFİ YOK / −%50 / 21g −%2.8 (en iyi, PF 0.93)
+  //   → kazananı erken satmak zararı ikiye katlıyordu; varsayılan: kâr hedefi yok.
+  // LONG_TP: prim getirisi (1 = +%100; varsayılan "none" = kâr hedefi yok) · LONG_SL: prim kaybı (0.5 = −%50; "none" = stop yok)
   // LONG_DTE: vadeye bu kadar gün kala kapat
-  LONG_TP: process.env.OPT_LONG_TP === "none" ? null : +(process.env.OPT_LONG_TP || 1),
+  LONG_TP: !process.env.OPT_LONG_TP || process.env.OPT_LONG_TP === "none" ? null : +process.env.OPT_LONG_TP,
   LONG_SL: process.env.OPT_LONG_SL === "none" ? null : +(process.env.OPT_LONG_SL || 0.5),
   LONG_DTE: +(process.env.OPT_LONG_DTE || 21),
   SIM_TOP: +(process.env.OPT_SIM_TOP || 15),         // dayanak başına simüle edilen en iyi aday sayısı
@@ -232,7 +234,7 @@ function manageText(i, r) {
   if (i.code === "LONG_CALL" || i.code === "LONG_PUT") {
     const prem = Math.abs(i.debit) * 100;
     return [
-      r.tp != null ? `+%${Math.round(r.tp / prem * 100)}'de (+$${r.tp}) kapat` : null,
+      r.tp != null ? `+%${Math.round(r.tp / prem * 100)}'de (+$${r.tp}) kapat` : "kâr hedefi yok — kazananı taşı (testte erken kâr almak zararı ikiye katladı)",
       r.sl != null ? `prim %${Math.round(-r.sl / prem * 100)} erirse (−$${-r.sl}) çık` : "zarar durdurma yok (en çok ödenen prim kaybedilir)",
       `vadeye ${r.dte} gün kalınca kapat (zaman erimesi hızlanır)`,
     ].filter(Boolean).join(" · ");

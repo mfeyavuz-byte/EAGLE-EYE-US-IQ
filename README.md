@@ -66,7 +66,7 @@ Günde 2 kez (10:15 ve 14:00 NY) en iyi fikirler + istek üzerine `/opsiyon SEMB
    gerçekçi dolum (orta + %30 spread). Dayanak fiyatı zincirden (put-call paritesi); IV/Greek'ler kendimiz.
 4. **Yönetilen işlem simülasyonu** (`options/sim.mjs`): her aday 2.000 fiyat yolunda **gün gün** yürütülür,
    her gün BS ile değerlenir ve **mesajdaki kurallar aynen** uygulanır (+%100 kâr al · −%50 zarar durdur ·
-   vadeye 21 gün kala kapat; kapatırken de spread ödenir). Yollar: stokastik oynaklık karışımı (kalın kuyruk).
+   vadeye 21 gün kala kapat — kâr hedefi yok; kapatırken de spread ödenir). Yollar: stokastik oynaklık karışımı.
    → önerdiğimiz **işlemin** EV'si, kazanma oranı, ortalama süresi, çıkış nedenleri.
    (Vade-sonu EV'si bunu göstermez: ör. KR call'da vade-sonu +$263, yönetilen +$48 — zarar durdurma çok sık tetiklenir.)
 5. **Kelly**: g(f) = E[ln(1 + f·R)] en büyüklenir → f*. Eleme: yönetilen EV ≥ %3 · maks zarar **ve** f* > 0.
@@ -81,7 +81,7 @@ Beklenti: Alımda oynaklık primini sen ödersin, orta ölçekli hisselerin opsi
 
 | Yapı | Kâr al | Zarar durdur | Süre |
 |---|---|---|---|
-| Long call / put | +%100 | primin %50'si | vadeye 21 gün · **vade içinde bilanço varsa bilançodan 1 gün önce** |
+| Long call / put | **yok** (test #4: kâr hedefi koymamak −%6.1 → −%2.8) | primin %50'si | vadeye 21 gün · **vade içinde bilanço varsa bilançodan 1 gün önce** |
 | *(OPT_LONG_ONLY=0)* Kredili | maks kârın %50'si | 2× kredi · kısa strike kırılırsa | vadeye 21 gün |
 | *(OPT_LONG_ONLY=0)* Borçlu spread | maks kârın %75'i | primin %50'si | vadeye 10 gün |
 

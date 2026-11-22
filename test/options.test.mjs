@@ -177,7 +177,7 @@ test("yönetim kuralları: mesaj ve simülasyon aynı kaynaktan", async () => {
   assert.deepEqual(rulesFor(credit), { tp: 75, sl: -300, dte: 21, breakShort: true });
   assert.equal(rulesFor({ ...credit, debit: -2, maxProfit: 200, maxLoss: 300 }).sl, null);   // 2× kredi ≥ maks zarar → stop yok
   assert.deepEqual(rulesFor({ kind: "debit", code: "BEAR_PUT", debit: 4, maxProfit: 600, maxLoss: 400 }), { tp: 450, sl: -200, dte: 10, breakShort: false });
-  assert.deepEqual(rulesFor({ kind: "debit", code: "LONG_CALL", debit: 3, maxProfit: Infinity, maxLoss: 300 }), { tp: 300, sl: -150, dte: 21, breakShort: false });
+  assert.deepEqual(rulesFor({ kind: "debit", code: "LONG_CALL", debit: 3, maxProfit: Infinity, maxLoss: 300 }), { tp: null, sl: -150, dte: 21, breakShort: false });
   assert.match(manageRules(credit), /\+\$75/);
 });
 
