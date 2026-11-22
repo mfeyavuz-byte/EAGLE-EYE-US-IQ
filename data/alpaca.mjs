@@ -59,6 +59,36 @@ export async function dailyBars(symbols, years = 2) {
   return out;
 }
 
+// GEÇMİŞ OPSİYON MUMLARI (Şubat 2024'ten beri). symbols: OCC kontrat sembolleri (≤100). Ücretsiz plan "indicative"
+// akışı: işlemler OPRA'dan türetilmiş. Geriye dönük testte kullanılır. 429'da bekleyip tekrar dener.
+// Dönüş: { OCC: [{ d:"YYYY-MM-DD", o, h, l, c, v }] } | null (yetki/ağ hatası)
+export async function optionBars(symbols, start, end) {
+  if (!alpacaEnabled() || !symbols.length) return null;
+  const out = {};
+  let token = null, pages = 0;
+  do {
+    const u = `https://data.alpaca.markets/v1beta1/options/bars?symbols=${encodeURIComponent(symbols.slice(0, 100).join(","))}&timeframe=1Day&start=${start}&end=${end}&limit=10000${token ? "&page_token=" + encodeURIComponent(token) : ""}`;
+    let j = null;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const ctrl = new AbortController(), tid = setTimeout(() => ctrl.abort(), 20000);
+      try {
+        const r = await fetch(u, { headers: HDR, signal: ctrl.signal });
+        clearTimeout(tid);
+        if (r.status === 429) { await new Promise(res => setTimeout(res, 3000 * (attempt + 1))); continue; }
+        if (!r.ok) { console.error("[Alpaca opsiyon]", r.status, (await r.text().catch(() => "")).slice(0, 120)); return null; }
+        j = await r.json(); break;
+      } catch (e) { clearTimeout(tid); await new Promise(res => setTimeout(res, 2000)); }
+    }
+    if (!j) return null;
+    for (const [sym, bars] of Object.entries(j.bars || {})) {
+      const arr = out[sym] || (out[sym] = []);
+      for (const b of bars) arr.push({ d: b.t.slice(0, 10), o: b.o, h: b.h, l: b.l, c: b.c, v: b.v });
+    }
+    token = j.next_page_token; pages++;
+  } while (token && pages < 20);
+  return out;
+}
+
 // Piyasa açık mı? (resmî tatilleri bilir). Alpaca yoksa null → çağıran saat hesabına düşer.
 export async function alpacaClock() {
   if (!alpacaEnabled()) return null;

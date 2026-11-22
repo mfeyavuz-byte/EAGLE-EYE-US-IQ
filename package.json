@@ -4,12 +4,16 @@
   "private": true,
   "type": "module",
   "description": "ABD borsaları için teknik/temel analiz + opsiyon önerili Telegram botu (GitHub Actions, bağımlılıksız)",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "node bot/run.mjs",
     "dry": "DRY_RUN=1 FORCE=1 node bot/run.mjs",
     "backtest": "node core/backtest.mjs",
     "universe": "node universe/build.mjs",
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "backtest:opt": "node --env-file=.env options/backtest.mjs",
+    "backtest:signals": "BT_SIGNALS_ONLY=1 node options/backtest.mjs"
   }
 }

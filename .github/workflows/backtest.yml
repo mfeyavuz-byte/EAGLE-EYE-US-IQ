@@ -1,0 +1,43 @@
+name: Opsiyon geriye dönük test
+
+# Elle çalıştırılır. Alpaca anahtarları repo secret'larından gelir (yerelde anahtar gerekmez).
+# Sonuç: iş özetine (Summary) ve işlem listesi artifact olarak.
+on:
+  workflow_dispatch:
+    inputs:
+      n:
+        description: "Evren: en likit N hisse"
+        default: "120"
+      step:
+        description: "Giriş sıklığı (işlem günü; 5 = haftalık)"
+        default: "5"
+      start:
+        description: "Başlangıç (YYYY-AA-GG, en erken 2024-02)"
+        default: "2024-03-01"
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Geriye dönük test
+        env:
+          ALPACA_KEY_ID: ${{ secrets.ALPACA_KEY_ID }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          BT_N: ${{ inputs.n }}
+          BT_STEP: ${{ inputs.step }}
+          BT_START: ${{ inputs.start }}
+          BT_OUT: trades.json
+        run: |
+          node options/backtest.mjs | tee out.txt
+          { echo '```'; sed -n '/^SONUÇ/,$p' out.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: opsiyon-backtest
+          path: |
+            out.txt
+            trades.json
