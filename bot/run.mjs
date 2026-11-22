@@ -54,6 +54,19 @@ export function fmtSignal(a) {
   return parts.join(" · ");
 }
 
+const SIG_KEYS = ["sym", "signal", "price", "confidence", "adx", "rsi", "rs60", "stopLoss", "target1", "rr", "dip"];
+export const compactSignal = a => Object.fromEntries(SIG_KEYS.map(k => [k, a[k]]));
+
+// /sinyaller: filtreyi geçen TÜM sinyaller, AL ve SAT ayrı başlıklarla (kalite sırasıyla). Kesme yok.
+export function fmtSignalList(ls) {
+  const al = ls.signals.filter(s => s.signal === "AL"), sat = ls.signals.filter(s => s.signal === "SAT");
+  const L = [`📋 Son tarama (${ls.at}) · ${ls.analyzed ?? "?"} hisse · filtreyi geçen ${ls.signals.length}`];
+  if (al.length) L.push("", `AL (${al.length})`, ...al.map(fmtSignal));
+  if (sat.length) L.push("", `SAT (${sat.length})`, ...sat.map(fmtSignal));
+  if (!ls.signals.length) L.push("", "Filtreyi geçen sinyal yok.");
+  return L.join("\n");
+}
+
 export function fmtDetail(a) {
   if (!a) return "Veri alınamadı (sembol hatalı olabilir).";
   const L = [
@@ -112,7 +125,7 @@ async function handleCommands(st, ivStore, ctx) {
     } else if (cmd === "/sinyaller") {
       const ls = st.lastScan;
       if (!ls) await sendTG("Henüz tarama yok.");
-      else await sendTG(`📋 Son tarama (${ls.at})\n\n` + (ls.signals.map(fmtSignal).join("\n") || "Filtreyi geçen sinyal yok."));
+      else await sendTG(fmtSignalList(ls));
     } else if (cmd === "/durum") {
       const ls = st.lastScan;
       await sendTG([
@@ -216,16 +229,22 @@ export async function main() {
   if (fresh.length || firstOfDay) {
     const al = fresh.filter(s => s.signal === "AL"), sat = fresh.filter(s => s.signal === "SAT");
     let m = `🇺🇸 ABD SPOT SİNYALLERİ${firstOfDay ? " — seans açılışı" : " — yeni"}\n${fmtTR()} (TR) · SPY 60g ${sgn(spy.ret60)}%\n`;
-    if (al.length) m += `\nAL (${al.length})\n` + al.slice(0, 15).map(fmtSignal).join("\n") + "\n";
-    if (sat.length) m += `\nSAT (${sat.length})\n` + sat.slice(0, 10).map(fmtSignal).join("\n") + "\n";
+    // Kesme YOK: liste zaten günlük kotayla sınırlı; uzun mesaj sendTG'de satır sınırından parçalanır.
+    if (al.length) m += `\nAL (${al.length})\n` + al.map(fmtSignal).join("\n") + "\n";
+    if (sat.length) m += `\nSAT (${sat.length})\n` + sat.map(fmtSignal).join("\n") + "\n";
     if (!al.length && !sat.length) m += "\nFiltreyi geçen yeni sinyal yok.\n";
     if (analyzed === 0) m += "\n⚠ Hiçbir sembol analiz edilemedi — veri kaynağı sorunu olabilir.\n";
     if (held) m += `\n(+${held} sinyal daha filtreyi geçti; günlük kota AL ${DAY_CAP.AL} / SAT ${DAY_CAP.SAT} — liste: /sinyaller)\n`;
     m += `\n${analyzed}/${SYMS.length} hisse tarandı · SAT = spotta çık/girme · ${DISCLAIMER}`;
-    await sendTG(m);
-    st.lastHeaderDay = today;
+    if (await sendTG(m)) st.lastHeaderDay = today;
+    else {
+      // Gönderilemeyen sinyaller "gönderildi" sayılmaz → sonraki run'da tekrar denenir (kaybolmaz).
+      for (const s of fresh) { delete st.sent.map[s.sym]; st.sent.n[s.signal]--; }
+      console.error(`⚠ Spot mesajı gönderilemedi — ${fresh.length} sinyal sonraki run'da tekrar denenecek.`);
+    }
   } else console.log("Yeni spot sinyali yok — mesaj gönderilmedi.");
-  st.lastScan = { at: fmtTR(), analyzed, signals: signals.slice(0, 60) };
+  // /sinyaller için filtreyi geçen TÜM sinyaller (kısa alanlarla — Gist boyutu küçük kalsın)
+  st.lastScan = { at: fmtTR(), analyzed, signals: signals.map(compactSignal) };
 
   // --- Opsiyon fikirleri: günde 2 kez (10:15 ve 14:00 NY; açılış spread'leri geniş olduğu için 10:15) ---
   const slot = mins >= 840 ? "PM" : mins >= 615 ? "AM" : null;

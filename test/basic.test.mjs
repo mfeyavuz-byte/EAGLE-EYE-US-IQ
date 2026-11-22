@@ -77,3 +77,27 @@ test("sinyal satırı biçimi", () => {
   assert.match(s, /🟢 X \$123\.4 · güven %80/);
   assert.match(s, /R:R 1\.4/);
 });
+
+test("Telegram parçalama: hiçbir satır kaybolmaz, her parça ≤ 4096", async () => {
+  const { chunks } = await import("../bot/telegram.mjs");
+  const lines = Array.from({ length: 300 }, (_, i) => `🟢 SYM${i} $123.45 · güven %90 · ADX 33 · RSI 55 · RS60 +12.3 · stop $118 · hedef $131 · R:R 2.5`);
+  const text = ["BAŞLIK", "", ...lines, "", "son satır"].join("\n");
+  const parts = chunks(text);
+  assert.ok(parts.length > 1);
+  assert.ok(parts.every(p => p.length > 0 && p.length <= 4096));
+  assert.equal(parts.join("\n"), text);                                       // birebir aynı metin
+  const long = "x".repeat(9000);                                              // sınırı aşan tek satır
+  const lp = chunks("a\n" + long + "\nb");
+  assert.ok(lp.every(p => p.length > 0 && p.length <= 4096));
+  assert.equal(lp.join("").replace(/\n/g, ""), "a" + long + "b");
+});
+
+test("/sinyaller: filtreyi geçen tüm sinyaller listelenir (kesme yok)", async () => {
+  const { fmtSignalList, compactSignal } = await import("../bot/run.mjs");
+  const { chunks } = await import("../bot/telegram.mjs");
+  const sigs = Array.from({ length: 82 }, (_, i) => compactSignal({ ...base, sym: `S${i}`, signal: i < 53 ? "AL" : "SAT", price: 100 + i, stopLoss: 95, target1: 110, rr: 2.5 }));
+  const txt = fmtSignalList({ at: "x", analyzed: 1328, signals: sigs });
+  assert.match(txt, /AL \(53\)/); assert.match(txt, /SAT \(29\)/);
+  const all = chunks(txt).join("\n");
+  for (const s of sigs) assert.ok(all.includes(`${s.sym} $`), s.sym);
+});
