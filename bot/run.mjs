@@ -18,6 +18,9 @@ import { loadFiles, saveFiles, READ_FAILED, gistEnabled, STATE_FILE, IVHIST_FILE
 import { sendTG, fetchCommands } from "./telegram.mjs";
 import { analyzeOptions, OCFG, setEdges } from "../options/engine.mjs";
 import { calibrate, fmtCalib } from "./calib.mjs";
+import { runEtf, fmtEtfBook, fmtEtfState, ETF_OPT } from "./etf.mjs";
+import { etfState, ETFS_FAST } from "../spot/etfsignal.mjs";
+import { loadChain } from "../options/chain.mjs";
 import { fmtAnalysis, fmtDailyIdeas } from "../options/format.mjs";
 import { histOf, snapshot } from "../options/ivhist.mjs";
 import { addIdeas, settle, stats, fmtStats, markBook, fmtClosed } from "../options/book.mjs";
@@ -121,6 +124,7 @@ const HELP = [
   "/takip SEMBOL — sahip olduğun hisseyi izle (SAT seçimi, 200g kırılımı, zirveden −%8 uyarısı)",
   "/birak SEMBOL — takipten çıkar · /takiplerim — takip listesi",
   "/portfoy — model portföy (Alpaca paper; PAPER_TRADE=1 ise)",
+  "/etf — SPY/QQQ kısa vade call sinyalinin durumu + ETF karnesi",
   "/durum — bot durumu",
   "/yardim — bu liste",
 ].join("\n");
@@ -140,6 +144,7 @@ export function weeklyReport(st, today, paperTxt = null) {
     fmtStats(stats(st.optBook || []))];
   if (paperTxt) L.push("", paperTxt);
   if (st.calib) L.push("", fmtCalib(st.calib));
+  if (st.etf) L.push("", fmtEtfBook(st));
   if (Object.keys(st.watch || {}).length) L.push("", fmtWatch(st));
   if (open.length) {
     L.push("", "Açık opsiyon fikirleri:");
@@ -147,6 +152,21 @@ export function weeklyReport(st, today, paperTxt = null) {
   }
   L.push("", "ℹ Spot getirileri sinyal yönünde (SAT için düşüş = +). SPY'a göre = sinyalin piyasaya katkısı. " + DISCLAIMER);
   return L.join("\n");
+}
+
+// ---------- SPY/QQQ kapanışları (son eleman = güncel fiyat) ----------
+async function etfCloses(sym) {
+  const daily = dailyCache.get(sym) || (await fetchDaily(sym).catch(() => []));
+  if (!daily.length) return null;
+  dailyCache.set(sym, daily);
+  const closes = daily.map(d => d.close);
+  const live = (await liveQuotes([sym]).catch(() => ({})))[sym];
+  if (live?.price > 0) {
+    const lastD = nyDate(new Date(daily.at(-1).ts)), liveD = nyDate(new Date(live.ts));
+    if (liveD === lastD) closes[closes.length - 1] = live.price;
+    else if (liveD > lastD) closes.push(live.price);
+  }
+  return closes;
 }
 
 // ---------- Opsiyon: tek sembol ----------
@@ -189,6 +209,10 @@ async function handleCommands(st, ivStore, ctx) {
       await sendTG(removeWatch(st, sym) ? `${sym} takipten çıkarıldı.` : `${sym || "?"} takipte değil.`);
     } else if (cmd === "/takiplerim") {
       await sendTG(fmtWatch(st));
+    } else if (cmd === "/etf") {
+      const lines = [];
+      for (const s of ETFS_FAST) lines.push(fmtEtfState(s, etfState(await etfCloses(s))));
+      await sendTG(["⚡ SPY/QQQ KISA VADE (call alımı)", ...lines, "", fmtEtfBook(st)].join("\n"));
     } else if (cmd === "/portfoy") {
       await sendTG((await paperSummary(st)) || "Model portföy kapalı. Açmak için repo → Settings → Secrets and variables → Actions → Variables → PAPER_TRADE = 1.");
     } else if (cmd === "/spotkarne") {
@@ -409,6 +433,18 @@ export async function main() {
   if ((wd === "Fri" && mins >= 930 && st.lastWeekly !== today) || process.env.WEEKLY_FORCE === "1") {
     st.lastWeekly = today;
     await sendTG(weeklyReport(st, today, await paperSummary(st)));
+  }
+
+  // --- SPY/QQQ KISA VADE CALL: 15:30 NY sonrası günde 1 (kapanışa yakın gir/çık) ---
+  if (mins >= 930 || process.env.ETF_FORCE === "1") {
+    const r = await ctx.r();
+    const lines = await runEtf(st, {
+      today, closesFor: etfCloses,
+      chainFor: async (sym, expTs = null) => expTs
+        ? loadChain(sym, r, { minDte: 0, maxDte: 400, targets: [Math.max(0, (expTs - Date.now() / 1e3) / 86400)] })
+        : loadChain(sym, r, { minDte: ETF_OPT.DTE, maxDte: ETF_OPT.DTE + 30, targets: [ETF_OPT.DTE + 2] }),
+    });
+    for (const l of lines) await sendTG(l + `\n\n${DISCLAIMER}`);
   }
 
   // --- IV geçmişi: günde 1 (15:00 NY sonrası) → IV rank zamanla oluşur ---

@@ -265,3 +265,27 @@ test("bilanço öncesi çıkış: simülasyon ve karne aynı kuralı uygular", a
   assert.equal(checkRules(b, 10, 100, 40, "2026-12-08"), null);
   assert.equal(checkRules(b, 10, 100, 40, "2026-12-09"), "bilanço öncesi");
 });
+
+test("SPY/QQQ kısa vade: sinyal → call önerisi → 5g ortalama üstünde KAPAT", async () => {
+  const { etfState } = await import("../spot/etfsignal.mjs");
+  const { runEtf, pickContract } = await import("../bot/etf.mjs");
+  const up = Array.from({ length: 250 }, (_, i) => 100 + i * 0.2);           // yükselen trend
+  const dip = [...up, up.at(-1) * 0.985, up.at(-1) * 0.97];                  // 2 sert düşüş günü
+  const s = etfState(dip);
+  assert.ok(s.up200 && s.rsi2 < 5 && s.tier === "güçlü");
+  const call = (K, delta, mid) => ({ type: "C", K, delta, mid, bid: mid - 0.05, ask: mid + 0.05, spreadPct: 0.1 / mid, liquid: true, sym: `SPY261231C00${K}000` });
+  const chain = { expiries: [{ exp: 1798675200, dte: 20, calls: [call(140, 0.6, 5)] }, { exp: 1799280000, dte: 33, calls: [call(140, 0.62, 6), call(145, 0.45, 3)] }] };
+  assert.equal(pickContract(chain, 30, 0.6).c.K, 140);                       // vade ≥30 → 33g; delta 0.62
+  const st = {};
+  let closes = dip;
+  const deps = { today: "2026-11-02", closesFor: async () => closes, chainFor: async () => chain };
+  const o1 = await runEtf(st, deps);
+  assert.ok(o1.some(l => l.includes("ETF FIRSAT")));
+  assert.ok(st.etf.pos.SPY && st.etf.pos.QQQ);
+  closes = [...dip, dip.at(-1) * 1.04];                                       // ertesi gün 5g ortalamanın üstü
+  const o2 = await runEtf(st, { ...deps, today: "2026-11-03" });
+  assert.ok(o2.some(l => l.includes("ETF KAPAT")));
+  assert.equal(st.etf.book.length, 2);
+  assert.equal(Object.keys(st.etf.pos).length, 0);
+  assert.equal((await runEtf(st, { ...deps, today: "2026-11-03" })).length, 0);   // aynı gün tekrar yok
+});

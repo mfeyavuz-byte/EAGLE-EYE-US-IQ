@@ -57,8 +57,8 @@ export const occ = (sym, exp, type, K) =>
   sym.replace(/[.\-]/g, "") + exp.slice(2, 4) + exp.slice(5, 7) + exp.slice(8, 10) + type + String(Math.round(K * 1000)).padStart(8, "0");
 
 // Delta hedefine en yakın olası strike'lar (listelenme adımı bilinmediği için birkaç adım birlikte denenir).
-export function strikeCands(type, S, T, sigma, target = DELTA, n = 8) {
-  const incs = S < 25 ? [0.5, 1] : S < 100 ? [1, 2.5, 5] : S < 250 ? [2.5, 5, 10] : [5, 10];
+export function strikeCands(type, S, T, sigma, target = DELTA, n = 8, incsIn = null) {
+  const incs = incsIn || (S < 25 ? [0.5, 1] : S < 100 ? [1, 2.5, 5] : S < 250 ? [2.5, 5, 10] : [5, 10]);
   const set = new Set();
   for (const inc of incs) for (let K = Math.ceil(S * 0.7 / inc) * inc; K <= S * 1.3; K += inc) set.add(+K.toFixed(2));
   const want = type === "C" ? target : -target;

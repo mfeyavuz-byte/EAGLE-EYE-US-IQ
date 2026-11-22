@@ -84,6 +84,12 @@ export async function fetchChart(sym, interval = "1d", range = "2y") {
   return parseChart(j);
 }
 export const fetchDaily = sym => fetchChart(sym, "1d", "2y");
+// Uzun GÜNLÜK geçmiş (range=max günlük vermez, seyreltir) — tarih aralığıyla. fromIso: "1993-01-01"
+export async function fetchHistory(sym, fromIso = "1990-01-01") {
+  const p1 = Math.floor(Date.parse(fromIso + "T00:00:00Z") / 1e3), p2 = Math.floor(Date.now() / 1e3);
+  const j = await yget(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(toYahoo(sym))}?interval=1d&period1=${p1}&period2=${p2}&includePrePost=false`);
+  return parseChart(j);
+}
 
 // Günlük mumdan haftalık mum (ISO hafta, Pazartesi başlangıç).
 export function weeklyFromDaily(daily) {

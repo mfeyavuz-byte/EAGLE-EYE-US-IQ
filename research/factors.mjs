@@ -4,7 +4,7 @@
 // Ölçü: KESİTSEL FAZLA GETİRİ = hissenin 21g getirisi − o gün evrenin ortalama 21g getirisi.
 // Böylece piyasanın genel yönü ve (büyük ölçüde) hayatta kalan yanlılığı ölçüden çıkar.
 // Çıktı: F_OUT (JSON) — research/evaluate.mjs okur.
-import { writeFileSync } from "node:fs";
+import { writeFileSync, readFileSync } from "node:fs";
 import { analyze, passes, loadUniverse } from "../spot/scan.mjs";
 import { fetchChart } from "../data/yahoo.mjs";
 
@@ -13,7 +13,14 @@ const START = process.env.F_START || "2023-06-01", OUT = process.env.F_OUT || "f
 const iso = ts => new Date(ts).toISOString().slice(0, 10);
 
 const { symbols, meta } = loadUniverse();
-const uni = symbols.slice(0, N);
+// F_PIT=<csv>: HAYATTA KALAN YANLILIĞINA KARŞI — her tarihte yalnız O GÜN S&P 500 üyesi olan hisseler
+// (ticker,start_date,end_date; fja05680/sp500 "sp500_ticker_start_end.csv"). Sonradan endekse girenler o tarihte
+// yoktur; sonradan çıkarılanlar (batan/düşenler dahil) o tarihte vardır.
+const PIT = process.env.F_PIT ? readFileSync(process.env.F_PIT, "utf8").trim().split("\n").slice(1).map(l => l.split(","))
+  .map(([t, s, e]) => ({ t: t.trim(), s, e: e?.trim() || "9999-12-31" })).filter(x => x.e >= START) : null;
+const isMember = (sym, d) => !PIT || PIT.some(x => x.t === sym && x.s <= d && d <= x.e);
+const uni = PIT ? [...new Set(PIT.map(x => x.t))] : symbols.slice(0, N);
+if (PIT) console.log(`PIT evren: ${uni.length} hisse (dönem içinde en az bir gün S&P 500 üyesi)`);
 const t0 = Date.now();
 const spy = await fetchChart("SPY", "1d", "5y");
 const data = {};
@@ -32,6 +39,7 @@ for (let di = 260; di < days.length - H; di += STEP) {
   const spyUp = spy[si].close > sma(spy, si, 200);
   const day = [];
   for (const s of uni) {
+    if (!isMember(s, d)) continue;
     const r = data[s];
     if (!r || r.length < 300) continue;
     let k = r.length - 1;
