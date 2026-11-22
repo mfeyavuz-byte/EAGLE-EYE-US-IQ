@@ -15,7 +15,9 @@ import { liveQuotes, alpacaEnabled, news } from "../data/alpaca.mjs";
 import { isMarketOpen, nyDate, nyParts, fmtTR } from "../data/market.mjs";
 import { riskFreeRate, fetchDaily, optionChain } from "../data/yahoo.mjs";
 import { loadFiles, saveFiles, READ_FAILED, gistEnabled, STATE_FILE, IVHIST_FILE, trimState } from "./state.mjs";
-import { sendTG, fetchCommands } from "./telegram.mjs";
+import { sendTG, sendPhoto, fetchCommands } from "./telegram.mjs";
+import { chartUrl, chartsEnabled } from "./chart.mjs";
+import { aiComments, aiItem, AI_MODEL } from "./ai.mjs";
 import { analyzeOptions, OCFG, setEdges } from "../options/engine.mjs";
 import { calibrate, fmtCalib } from "./calib.mjs";
 import { runEtf, fmtEtfBook, fmtEtfState, ETF_OPT } from "./etf.mjs";
@@ -190,7 +192,9 @@ async function handleCommands(st, ivStore, ctx) {
       const live = (await liveQuotes([sym]))[sym] || null;
       const spy = await ctx.spy();
       const [a, nw] = await Promise.all([analyze(sym, { live, spyRet60: spy.ret60 }).catch(() => null), news(sym, 5).catch(() => [])]);
-      await sendTG(fmtDetail(a, nw));
+      const ai = a ? await aiComments([aiItem(a, { news: nw.map(n => n.headline).slice(0, 5) })]) : {};
+      await sendTG(fmtDetail(a, nw) + (ai[sym] ? `\n\n🧠 Yorum (yapay zekâ): ${ai[sym]}` : ""), { buttons: a ? [[{ text: "📊 Opsiyon analizi", data: `/opsiyon ${sym}` }, { text: "👁 Takip et", data: `/takip ${sym}` }]] : null });
+      if (a && chartsEnabled() && dailyCache.get(sym)?.length > 30) await sendPhoto(chartUrl(sym, dailyCache.get(sym), { stop: a.stopLoss, target: a.target1 }), `${sym} · son ~6 ay · 50g/200g ortalama${a.pick ? " · stop/hedef" : ""}`);
     } else if (cmd === "/opsiyon") {
       if (!sym) { await sendTG("Kullanım: /opsiyon SEMBOL (örn. /opsiyon NVDA)"); continue; }
       await sendTG(`⏳ ${sym} opsiyon zinciri analiz ediliyor…`);
@@ -338,8 +342,11 @@ export async function main() {
     if (!al.length && !sat.length) m += "\nFiltreyi geçen yeni sinyal yok.\n";
     if (analyzed === 0) m += "\n⚠ Hiçbir sembol analiz edilemedi — veri kaynağı sorunu olabilir.\n";
     if (held) m += `\n(+${held} sinyal daha filtreyi geçti; günlük kota AL ${DAY_CAP.AL} / SAT ${DAY_CAP.SAT}, sektör başına ${SEC_CAP} — liste: /sinyaller)\n`;
+    const ai = await aiComments(fresh.map(x => aiItem(x, { sector: UNI.meta?.[x.sym]?.sec })));
+    if (Object.keys(ai).length) m += `\n🧠 Yorum (yapay zekâ · ${AI_MODEL} · yalnız yukarıdaki metriklere dayanır)\n` + Object.entries(ai).map(([k, v]) => `• ${k}: ${v}`).join("\n") + "\n";
     m += `\n${analyzed}/${SYMS.length} hisse tarandı · SAT = spotta çık/girme · ${DISCLAIMER}`;
-    if (await sendTG(m)) {
+    const btn = fresh.slice(0, 16).map(s => ({ text: `${s.signal === "AL" ? "🟢" : "🔴"} ${s.sym}`, data: `/hisse ${s.sym}` }));
+    if (await sendTG(m, { buttons: Array.from({ length: Math.ceil(btn.length / 4) }, (_, k) => btn.slice(k * 4, k * 4 + 4)) })) {
       st.lastHeaderDay = today;
       logSignals((st.spotBook ||= []), fresh, today, spyPx);           // canlı spot karnesi
     } else {
@@ -390,7 +397,8 @@ export async function main() {
     const { ideas, scanned } = await dailyOptionIdeas(signals, all, ivStore, r, spy.ret60);
     st.lastOptKey = optKey;
     addIdeas((st.optBook ||= []), ideas.slice(0, 6), today);          // karneye kaydet (vade sonunda ölçülecek)
-    await sendTG(fmtDailyIdeas(ideas.slice(0, 6), `🎯 ABD OPSİYON FİKİRLERİ — ${slot === "PM" ? "öğleden sonra" : "sabah"}\n${fmtTR()} (TR) · ${scanned} dayanak incelendi · risksiz faiz %${(r * 100).toFixed(2)}`));
+    await sendTG(fmtDailyIdeas(ideas.slice(0, 6), `🎯 ABD OPSİYON FİKİRLERİ — ${slot === "PM" ? "öğleden sonra" : "sabah"}\n${fmtTR()} (TR) · ${scanned} dayanak incelendi · risksiz faiz %${(r * 100).toFixed(2)}`),
+      { buttons: [ideas.slice(0, 6).map(x => ({ text: `📊 ${x.sym}`, data: `/opsiyon ${x.sym}` }))] });
     console.log(`Opsiyon: ${ideas.length} fikir · ${((Date.now() - t1) / 1e3).toFixed(0)}s`);
   }
 
@@ -444,7 +452,7 @@ export async function main() {
         ? loadChain(sym, r, { minDte: 0, maxDte: 400, targets: [Math.max(0, (expTs - Date.now() / 1e3) / 86400)] })
         : loadChain(sym, r, { minDte: ETF_OPT.DTE, maxDte: ETF_OPT.DTE + 30, targets: [ETF_OPT.DTE + 2] }),
     });
-    for (const l of lines) await sendTG(l + `\n\n${DISCLAIMER}`);
+    for (const l of lines) await sendTG(l + `\n\n${DISCLAIMER}`, { buttons: [[{ text: "⚡ SPY/QQQ durumu", data: "/etf" }]] });
   }
 
   // --- IV geçmişi: günde 1 (15:00 NY sonrası) → IV rank zamanla oluşur ---

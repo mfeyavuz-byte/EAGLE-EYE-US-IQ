@@ -100,8 +100,26 @@ Beklenti: Alımda oynaklık primini sen ödersin, orta ölçekli hisselerin opsi
 
 ### Komutlar
 `/hisse NVDA` (seçim + faktörler + teknik + **son haberler**) · `/opsiyon AAPL` · `/sinyaller` · `/karne` ·
-`/spotkarne` · `/takip SEMBOL` · `/birak SEMBOL` · `/takiplerim` · `/portfoy` · `/durum` · `/yardim`
+`/spotkarne` · `/takip SEMBOL` · `/birak SEMBOL` · `/takiplerim` · `/portfoy` · `/etf` · `/durum` · `/yardim`
 > Komutlar bot çalışırken okunur (seans içinde ~20 dk gecikmeyle).
+
+**Butonlar:** spot sinyal mesajında her hisse için 🔎 butonu (`/hisse`), `/hisse` altında "📊 Opsiyon analizi" ve
+"👁 Takip et", opsiyon fikirlerinde 📊, ETF fırsatında "⚡ SPY/QQQ durumu". Tıklama bir komut gibi işlenir.
+**Grafik:** `/hisse` son ~6 ayın fiyatı + 50g/200g ortalama + stop/hedef çizgileriyle gelir (quickchart.io; yalnız
+herkese açık fiyat verisi gider; `CHARTS=0` kapatır).
+**Yapay zekâ yorumu (isteğe bağlı):** `ANTHROPIC_API_KEY` secret'ı eklenirse spot sinyallerine ve `/hisse`'ye
+Claude'dan 2-3 cümlelik Türkçe yorum eklenir — yalnız mesajdaki metriklere (ve haber başlıklarına) dayanır, fiyat
+tahmini yapmaz. Model: `AI_MODEL` repo değişkeni (varsayılan `claude-opus-5-5`, düşük effort); güvenlik reddinde sunucu
+tarafı yedek model. SDK GitHub'da kurulur; kurulum ya da çağrı başarısız olursa bot yorumsuz devam eder. Maliyet: mesaj
+başına bir istek (yaklaşık birkaç sent / gün).
+
+## SPY / QQQ kısa vade call (yalnız alım)
+Kural (`spot/etfsignal.mjs`): kapanış > 200g ortalama **ve** RSI(2) < 5 (güçlü) / < 10 (normal) → **kapanış 5g
+ortalamanın üstüne çıkınca** ya da en çok 10 işlem günü sonra çık. Ölçüm (`research/etf.mjs`, eğitim < 2014 ≤ test):
+isabet SPY %82 / %78, QQQ %71 / %81; ort. +%0.6–0.8; ~3 gün; günlük getiri tabanın 4–6 katı. Düşüş (put) kuralları
+tutarsız → kullanılmaz. Bot 15:30 NY sonrası günde bir kontrol eder; sinyalde canlı zincirden call önerir (vade ≥
+`ETF_DTE`=30 gün, delta ≈ `ETF_DELTA`=0.6, likit), çıkış koşulunda **"📕 ETF KAPAT"** gönderir, ETF karnesine yazar.
+Vade/delta seçimi: Actions → **ETF opsiyon geriye dönük test** (14/30/60 gün × delta 0.5/0.7, gerçek opsiyon fiyatları).
 
 ## Geriye dönük test ve araştırma
 ```bash
@@ -111,7 +129,10 @@ F_OUT=factors.json node research/factors.mjs && node research/evaluate.mjs facto
 ```
 GitHub'da: Actions → **Opsiyon geriye dönük test** → Run workflow (anahtarlar secret'lardan; sonuç iş özetinde).
 Opsiyon testi: AL → call, SAT → put (≥35 gün, delta ≈ 0.6), giriş sinyalden sonraki gün kapanışı, canlı kurallarla
-çıkış; **kontrol grubu** aynı hisse/gün ters yön; maliyet %0/%3/%6 duyarlılığı.
+çıkış; **kontrol grubu** aynı hisse/gün ters yön; maliyet %0/%3/%6 duyarlılığı; 8 çıkış kuralı varyantı;
+**girişteki IV/HV dilimleri** ("ucuz IV'de almak daha mı iyi?"); `min_dte` = 180 ile **LEAPS** modu. Sonuç Telegram'a da gelir.
+Hayatta kalan yanlılığına karşı: `F_PIT=sp500_ticker_start_end.csv` ile araştırma her tarihte yalnız o günkü S&P 500
+üyelerini kullanır (fja05680/sp500).
 
 ## Kurulum
 1. **Yeni Telegram botu:** @BotFather → `/newbot` → token. @userinfobot → chat ID. Kendi botuna `/start` yaz.
@@ -127,6 +148,10 @@ Opsiyon testi: AL → call, SAT → put (≥35 gün, delta ≈ 0.6), giriş siny
 | `TG_TOKEN`, `TG_CHAT` | ✅ |
 | `GH_GIST_TOKEN`, `GIST_ID` | ✅ (yoksa durum, karneler ve IV geçmişi kaybolur) |
 | `ALPACA_KEY_ID`, `ALPACA_SECRET_KEY` | önerilir (haberler ve opsiyon testi için gerekli) |
+| `ANTHROPIC_API_KEY` | isteğe bağlı (yapay zekâ yorumu) |
+
+Repo **değişkenleri** (Variables): `PAPER_TRADE` = `1` (model portföy), `AI_MODEL` (yorum modeli).
+Herhangi bir workflow başarısız olursa Telegram'a 🚨 alarm gelir; tarama her çalışmadan önce birim testlerini koşar.
 
 5. Actions → **ABD BOT — Spot + Opsiyon** → Run workflow (`force` işaretli) → Telegram'a mesaj düşmeli.
 

@@ -15,5 +15,8 @@
     "test": "node --test test/*.test.mjs",
     "backtest:opt": "node --env-file=.env options/backtest.mjs",
     "backtest:signals": "BT_SIGNALS_ONLY=1 node options/backtest.mjs"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": ">=0.136.0"
   }
 }

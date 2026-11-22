@@ -192,3 +192,30 @@ test("canlı kalibrasyon: önselden canlıya doğru kayar, sınırlıdır, motor
   assert.ok(Math.abs(OCFG.EDGE_AL - c.AL.annual) < 1e-12);
   OCFG.EDGE_AL = before;
 });
+
+test("yapay zekâ yorumu: anahtar yoksa kapalı, yanıt ayrıştırılır, hata/ret sinyali bozmaz", async () => {
+  const ai = await import("../bot/ai.mjs");
+  const saved = process.env.ANTHROPIC_API_KEY;
+  delete process.env.ANTHROPIC_API_KEY;
+  assert.deepEqual(await ai.aiComments([{ sym: "X" }]), {});                // anahtarsız → istek yok
+  process.env.ANTHROPIC_API_KEY = "test";
+  let req = null;
+  ai._setClient({ beta: { messages: { create: async r => { req = r; return { stop_reason: "end_turn", content: [{ type: "text", text: "X: Momentum güçlü.\nY: Risk yüksek.\nZZZ: uydurma" }] }; } } } });
+  const out = await ai.aiComments([{ sym: "X" }, { sym: "Y" }]);
+  assert.deepEqual(out, { X: "Momentum güçlü.", Y: "Risk yüksek." });       // listede olmayan sembol atılır
+  assert.equal(req.fallbacks, "default");
+  assert.ok(req.betas.includes("server-side-fallback-2026-07-01"));
+  ai._setClient({ beta: { messages: { create: async () => ({ stop_reason: "refusal", stop_details: { category: "x" }, content: [] }) } } });
+  assert.deepEqual(await ai.aiComments([{ sym: "X" }]), {});
+  ai._setClient({ beta: { messages: { create: async () => { throw new Error("ağ"); } } } });
+  assert.deepEqual(await ai.aiComments([{ sym: "X" }]), {});
+  ai._setClient(null);
+  if (saved == null) delete process.env.ANTHROPIC_API_KEY; else process.env.ANTHROPIC_API_KEY = saved;
+});
+
+test("Telegram butonları: 64 bayt sınırı ve boş satırlar", async () => {
+  const { keyboard } = await import("../bot/telegram.mjs");
+  const kb = keyboard([[{ text: "A", data: "/hisse A" }, { text: "B", data: "/x " + "y".repeat(70) }], []]);
+  assert.deepEqual(kb, { inline_keyboard: [[{ text: "A", callback_data: "/hisse A" }]] });
+  assert.equal(keyboard(null), null);
+});

@@ -22,17 +22,31 @@ export function chunks(text, max = 3900) {
 
 // Her parça en çok 4 kez denenir. 429 (hız sınırı) → Telegram'ın söylediği süre kadar beklenir.
 // Parçalar arası 1.1 sn (Telegram: aynı sohbete saniyede ~1 mesaj).
-export async function sendTG(text) {
-  if (DRY || !tgEnabled()) { console.log("\n----- [TG] -----\n" + text + "\n----------------"); return true; }
+// buttons: [[{ text, data }]] satırlar → yalnız SON parçaya eklenir. data = komut metni (örn. "/opsiyon NVDA").
+// Telegram callback_data sınırı 64 bayt → uzun olanlar atlanır.
+export function keyboard(buttons) {
+  const rows = (buttons || []).map(r => r.filter(b => b?.text && b.data && Buffer.byteLength(b.data) <= 64)
+    .map(b => ({ text: b.text, callback_data: b.data }))).filter(r => r.length);
+  return rows.length ? { inline_keyboard: rows } : null;
+}
+
+export async function sendTG(text, { buttons = null } = {}) {
+  const kb = keyboard(buttons);
+  if (DRY || !tgEnabled()) {
+    console.log("\n----- [TG] -----\n" + text + (kb ? "\n[butonlar] " + kb.inline_keyboard.map(r => r.map(b => b.text).join(" | ")).join(" / ") : "") + "\n----------------");
+    return true;
+  }
   let ok = true;
   const parts = chunks(text);
   for (let i = 0; i < parts.length; i++) {
     let sent = false;
     for (let attempt = 0; attempt < 4 && !sent; attempt++) {
       try {
+        const payload = { chat_id: CHAT, text: parts[i], disable_web_page_preview: true };
+        if (kb && i === parts.length - 1) payload.reply_markup = kb;
         const r = await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
           method: "POST", headers: { "content-type": "application/json" },
-          body: JSON.stringify({ chat_id: CHAT, text: parts[i], disable_web_page_preview: true }),
+          body: JSON.stringify(payload),
         });
         if (r.ok) { sent = true; break; }
         const body = await r.json().catch(() => ({}));
@@ -59,10 +73,43 @@ export async function fetchCommands(offset = 0) {
     const updates = [];
     for (const u of res) {
       off = u.update_id + 1;
+      // Buton tıklaması (callback_query): data bir komut metnidir; yalnız yetkili sohbetten
+      const cq = u.callback_query;
+      if (cq) {
+        if (String(cq.message?.chat?.id) !== String(CHAT)) continue;
+        answerCallback(cq.id);                                          // butondaki "yükleniyor"u kapat (hata önemsiz)
+        const t = String(cq.data || "").trim();
+        if (t.startsWith("/")) updates.push({ text: t });
+        continue;
+      }
       if (String(u.message?.chat?.id) !== String(CHAT)) continue;   // başkası bota yazarsa yok say
       const text = (u.message?.text || "").trim();
       if (text) updates.push({ text });
     }
     return { updates, offset: off };
   } catch { return { updates: [], offset }; }
+}
+
+function answerCallback(id) {
+  fetch(`https://api.telegram.org/bot${TOKEN}/answerCallbackQuery`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ callback_query_id: id, text: "Alındı — bot bir sonraki çalışmasında yanıtlar (~20 dk)." }),
+  }).catch(() => {});
+}
+
+// Fotoğraf (grafik) gönder: url'deki görüntü İNDİRİLİR ve Telegram'a dosya olarak yüklenir (uzun URL sorunu yok).
+// Başarısızsa false (çağıran yalnız metinle devam eder).
+export async function sendPhoto(url, caption = "") {
+  if (DRY || !tgEnabled()) { console.log(`\n----- [TG foto] ${url.slice(0, 100)}… -----\n${caption}\n----------------`); return true; }
+  try {
+    const img = await fetch(url);
+    if (!img.ok || !String(img.headers.get("content-type")).startsWith("image/")) { console.error("[TG foto] görüntü alınamadı", img.status); return false; }
+    const form = new FormData();
+    form.append("chat_id", String(CHAT));
+    if (caption) form.append("caption", caption.slice(0, 1000));
+    form.append("photo", new Blob([await img.arrayBuffer()], { type: "image/png" }), "grafik.png");
+    const r = await fetch(`https://api.telegram.org/bot${TOKEN}/sendPhoto`, { method: "POST", body: form });
+    if (!r.ok) console.error("[TG foto] hata", r.status, (await r.text().catch(() => "")).slice(0, 150));
+    return r.ok;
+  } catch (e) { console.error("[TG foto]", e.message); return false; }
 }

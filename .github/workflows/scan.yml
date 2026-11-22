@@ -34,6 +34,9 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: "22"
+      - name: Bağımlılık (yapay zekâ yorumu için; başarısız olursa bot yorumsuz çalışır)
+        continue-on-error: true
+        run: npm install --no-audit --no-fund --omit=dev
       - name: Birim testleri (bozuk kodla çalışma — hata alarmı tetiklenir)
         run: npm test
       - name: Seans boyunca her 20 dk tara
@@ -45,6 +48,8 @@ jobs:
           ALPACA_KEY_ID: ${{ secrets.ALPACA_KEY_ID }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
           PAPER_TRADE: ${{ vars.PAPER_TRADE }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          AI_MODEL: ${{ vars.AI_MODEL }}
           FORCE: ${{ inputs.force && '1' || '' }}
         run: |
           set +e
