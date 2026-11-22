@@ -13,7 +13,7 @@ import { isMarketOpen, nyDate, nyParts, fmtTR } from "../data/market.mjs";
 import { riskFreeRate, fetchDaily, optionChain } from "../data/yahoo.mjs";
 import { loadFiles, saveFiles, READ_FAILED, gistEnabled, STATE_FILE, IVHIST_FILE } from "./state.mjs";
 import { sendTG, fetchCommands } from "./telegram.mjs";
-import { analyzeOptions } from "../options/engine.mjs";
+import { analyzeOptions, OCFG } from "../options/engine.mjs";
 import { fmtAnalysis, fmtDailyIdeas } from "../options/format.mjs";
 import { histOf, snapshot } from "../options/ivhist.mjs";
 import { addIdeas, settle, stats, fmtStats, markBook, fmtClosed } from "../options/book.mjs";
@@ -130,10 +130,12 @@ async function handleCommands(st, ivStore, ctx) {
 // ---------- Opsiyon: günlük fikirler ----------
 // Yönlü adaylar: en güçlü AL/SAT sinyalleri (opsiyon likiditesi için yüksek hacimli olanlar).
 // Nötr adaylar: endeks ETF'leri + yönsüz (ADX<20) en likit hisseler → oynaklık pahalıysa iron condor.
+// Yalnız alım modunda nötr hisseler atlanır (yönsüz alım önerilmez) ve yönlü aday sayısı artırılır.
 async function dailyOptionIdeas(signals, all, ivStore, r, spyRet60) {
   const liquid = a => a.dollarVol >= 150e6 && a.price >= 15;
-  const dirC = [...signals.filter(s => s.signal === "AL" && liquid(s)).slice(0, 10), ...signals.filter(s => s.signal === "SAT" && liquid(s)).slice(0, 6)];
-  const neuC = all.filter(a => liquid(a) && (a.signal === "NÖTR" || a.adx < 20)).sort((a, b) => b.dollarVol - a.dollarVol).slice(0, 8);
+  const [nAl, nSat] = OCFG.LONG_ONLY ? [14, 10] : [10, 6];
+  const dirC = [...signals.filter(s => s.signal === "AL" && liquid(s)).slice(0, nAl), ...signals.filter(s => s.signal === "SAT" && liquid(s)).slice(0, nSat)];
+  const neuC = OCFG.LONG_ONLY ? [] : all.filter(a => liquid(a) && (a.signal === "NÖTR" || a.adx < 20)).sort((a, b) => b.dollarVol - a.dollarVol).slice(0, 8);
   const etfSpots = await Promise.all(ETFS.map(s => analyze(s, { spyRet60 }).catch(() => null)));
   const cands = [...dirC, ...neuC, ...etfSpots.filter(Boolean)];
   const seen = new Set(), out = [];

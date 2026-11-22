@@ -109,15 +109,27 @@ test("strateji üretici: kredili spread kuralları ve iron condor", () => {
   for (const x of ic) { assert.equal(x.legs.length, 4); assert.equal(x.breakevens.length, 2); }
 });
 
-test("yön × rejim matrisi", () => {
-  assert.deepEqual([...allowedFor(1, "ucuz")], ["LONG_CALL", "BULL_CALL"]);
-  assert.deepEqual([...allowedFor(1, "zengin")], ["BULL_PUT", "BULL_CALL"]);
-  assert.deepEqual([...allowedFor(-1, "zengin")], ["BEAR_CALL", "BEAR_PUT"]);
-  assert.deepEqual([...allowedFor(0, "zengin")], ["IRON_CONDOR"]);
-  assert.equal(allowedFor(0, "ucuz").size, 0);
-  assert.deepEqual([...allowedFor(0, "zengin", 1.5, 1.15)], ["IRON_CONDOR"]);   // hafif ters: izin var (σ ≥ IV)
-  assert.equal(allowedFor(0, "zengin", 1.5, 1.4).size, 0);                     // belirgin ters: condor yasak
-  assert.deepEqual([...allowedFor(-1, "zengin", 1.5, 1.4)], ["BEAR_CALL", "BEAR_PUT"]);   // yönlü yapılar sürer
+test("yalnız-alım modu (varsayılan): sadece long call / long put, satış bacağı asla", () => {
+  for (const reg of ["ucuz", "adil", "zengin"]) {
+    assert.deepEqual([...allowedFor(1, reg, 1.5, 1.4)], ["LONG_CALL"]);
+    assert.deepEqual([...allowedFor(-1, reg, 1.5, 1.4)], ["LONG_PUT"]);
+    assert.equal(allowedFor(0, reg, 1.5, 1.0).size, 0);                         // yön yok → öneri yok
+  }
+  // aday üretici bile izin verilmeyen yapı üretmez
+  const c = candidates(synthChain(), 100, allowedFor(1, "zengin"));
+  assert.ok(c.length > 0 && c.every(x => x.code === "LONG_CALL" && x.legs.every(l => l.side > 0)));
+});
+
+test("yön × rejim matrisi (OPT_LONG_ONLY=0)", () => {
+  const A = (d, r, iv = null, t = null) => allowedFor(d, r, iv, t, false);
+  assert.deepEqual([...A(1, "ucuz")], ["LONG_CALL", "BULL_CALL"]);
+  assert.deepEqual([...A(1, "zengin")], ["BULL_PUT", "BULL_CALL"]);
+  assert.deepEqual([...A(-1, "zengin")], ["BEAR_CALL", "BEAR_PUT"]);
+  assert.deepEqual([...A(0, "zengin")], ["IRON_CONDOR"]);
+  assert.equal(A(0, "ucuz").size, 0);
+  assert.deepEqual([...A(0, "zengin", 1.5, 1.15)], ["IRON_CONDOR"]);   // hafif ters: izin var (σ ≥ IV)
+  assert.equal(A(0, "zengin", 1.5, 1.4).size, 0);                     // belirgin ters: condor yasak
+  assert.deepEqual([...A(-1, "zengin", 1.5, 1.4)], ["BEAR_CALL", "BEAR_PUT"]);   // yönlü yapılar sürer
   assert.equal(directionOf({ signal: "AL", confidence: 90 }).dir, 1);
   assert.equal(directionOf({ signal: "AL", confidence: 55 }).dir, 0);   // zayıf sinyal → nötr
   assert.equal(directionOf({ signal: "SAT", confidence: 72, passed: false }).dir, 0);   // filtre dışı → nötr

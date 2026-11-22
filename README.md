@@ -24,13 +24,20 @@ Filtre (ABD için sıkılaştırıldı; BIST eşikleriyle 1.328 hissenin 414'ü 
   kalanlar `/sinyaller` ile görülür.
 
 **Opsiyon** — günde 2 kez (10:15 ve 14:00 New York) en iyi 6 opsiyon fikri + istek üzerine `/opsiyon SEMBOL`.
+
+> 🔒 **YALNIZ ALIM MODU (varsayılan):** Bot yalnızca **long call** ve **long put** (opsiyon ALIMI) önerir.
+> Hiçbir bacağı satış olan yapı önerilmez: put/call satışı, kredili spread, iron condor ve ikinci bacağı satış olan
+> borçlu spread'ler dahil. Yön yoksa öneri yoktur. Aşağıdaki geniş matris yalnızca `OPT_LONG_ONLY=0` ile açılır.
+> Sonuç: Alınan opsiyonda oynaklık risk primini sen ödersin; bu yüzden fikirler seyrek gelir, gelen fikrin
+> avantajı ağırlıkla yön tahminine dayanır.
+
 Karar zinciri:
 1. **Yön**: spot sinyali — yalnızca spot filtresini geçmişse (aksi halde nötr sayılır).
 2. **Oynaklık rejimi**: IV rank (≥20 günlük geçmiş varsa) yoksa IV/HV oranı → *ucuz / adil / zengin*.
 3. **Olay / stres**: bilanço vade içindeyse prim SATAN yapılar (kredili spread, iron condor) o vadede yasak;
    oynaklık avantajı iddia edilmez. Vade yapısı ters (> 1.10) → σ ≥ IV (oynaklık avantajı iddia edilmez);
    **belirgin ters (> 1.25) → iron condor yasak** (yönsüz prim satışı stres dönemlerinde en çok yara alan işlemdir).
-4. **Matris**:
+4. **Matris** (yalnız alım modunda: Yukarı → long call, Aşağı → long put, Nötr → bekle; tablo `OPT_LONG_ONLY=0` içindir):
 
 | Yön \ IV | ucuz | adil | zengin |
 |---|---|---|---|
@@ -116,7 +123,7 @@ npm run backtest                                 # spot eşiklerinin ABD'deki is
 ```
 Ayarlar (env): `MIN_CONF`, `MIN_CONF_SAT`, `MIN_ADX`, `MIN_ADX_SAT`, `MAX_RSI_BUY`, `MIN_RSI_SAT`, `MIN_DVOL`,
 `MAX_AL_DAY`, `MAX_SAT_DAY`, `CORE_N` · opsiyon: `OPT_MIN_EDGE`, `OPT_ACCOUNT`, `OPT_RISK`, `OPT_MIN_OI`,
-`OPT_MAX_SPREAD`, `OPT_SLIP`, `OPT_TILT`, `OPT_DIR_TRUST`, `OPT_INV`, `OPT_INV_HARD`, `IV_TOP`.
+`OPT_MAX_SPREAD`, `OPT_SLIP`, `OPT_TILT`, `OPT_DIR_TRUST`, `OPT_LONG_ONLY`, `OPT_INV`, `OPT_INV_HARD`, `IV_TOP`.
 
 ## Dosyalar
 ```

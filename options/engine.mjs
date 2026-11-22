@@ -24,6 +24,9 @@ export const OCFG = {
   // Yön tahmininin EV katkısına güven payı. Spot sinyalinin ABD isabeti /karne ve backtest'le doğrulanana dek
   // yön kaynaklı EV yarı ağırlıkla sayılır → avantajı YALNIZCA yön tahminine dayanan fikir zor geçer.
   DIR_TRUST: +(process.env.OPT_DIR_TRUST || 0.5),
+  // KULLANICI KURALI: yalnızca opsiyon ALIMI (long call / long put). Hiçbir bacağı satış olan yapı önerilmez —
+  // kredili spread, iron condor ve borçlu spread'ler (ikinci bacağı satış) dahil. OPT_LONG_ONLY=0 ile eski matris.
+  LONG_ONLY: process.env.OPT_LONG_ONLY !== "0",
 };
 
 // Spot analizinden yön puanı. Güven 50 → 0, 100 → ±1.
@@ -37,7 +40,10 @@ export function directionOf(a) {
 }
 
 // Yön × rejim matrisi (+ stres freni: vade yapısı belirgin tersse yönsüz prim satışı yok)
-export function allowedFor(dir, regime, ivhv, termRatio = null) {
+// Yalnız-alım modunda: yukarı → long call, aşağı → long put, yön yok → hiçbir şey. Pahalı oynaklıkta alım
+// yasak değildir ama oynaklık maliyeti EV'yi düşürür; eleme bunu kendisi yapar.
+export function allowedFor(dir, regime, ivhv, termRatio = null, longOnly = OCFG.LONG_ONLY) {
+  if (longOnly) return new Set(dir > 0 ? ["LONG_CALL"] : dir < 0 ? ["LONG_PUT"] : []);
   if (dir > 0) return new Set(regime === "ucuz" ? ["LONG_CALL", "BULL_CALL"] : regime === "zengin" ? ["BULL_PUT", "BULL_CALL"] : ["BULL_CALL", "BULL_PUT"]);
   if (dir < 0) return new Set(regime === "ucuz" ? ["LONG_PUT", "BEAR_PUT"] : regime === "zengin" ? ["BEAR_CALL", "BEAR_PUT"] : ["BEAR_PUT", "BEAR_CALL"]);
   if (termRatio && termRatio > OCFG.INV_HARD) return new Set();
@@ -54,12 +60,13 @@ export async function analyzeOptions(sym, { spot, daily, r, hist = null, top = 3
   const allowed = allowedFor(d.dir, vol.regime, vol.ivhv, vol.termRatio);
   const stress = vol.termRatio && vol.termRatio > OCFG.INV_HARD;
   const reasons = [`Yön: ${d.label}`, `Oynaklık: ${vol.regime}${vol.rank != null ? ` (IV rank ${vol.rank})` : vol.ivhv ? ` (IV/HV ${vol.ivhv.toFixed(2)})` : ""}`];
-  if (vol.termRatio && vol.termRatio > OCFG.INV) reasons.push(`Vade yapısı TERS (${vol.termRatio.toFixed(2)}) — yakın vadede olay/stres fiyatlanıyor${stress ? "; yönsüz prim satışı (iron condor) yasak" : ""}`);
+  if (vol.termRatio && vol.termRatio > OCFG.INV) reasons.push(`Vade yapısı TERS (${vol.termRatio.toFixed(2)}) — yakın vadede olay/stres fiyatlanıyor${stress && !OCFG.LONG_ONLY ? "; yönsüz prim satışı (iron condor) yasak" : ""}`);
   if (Math.abs(chain.parityGap) >= 0.002) reasons.push(`Dayanak fiyatı zincirden (parite) alındı: $${chain.S.toFixed(2)} (kotasyon $${chain.Squote.toFixed(2)}, fark ${(chain.parityGap * 100).toFixed(2)}%)`);
   const base = { sym, S: chain.S, vol, dir: d, reasons, allowed: [...allowed] };
   if (chain.S < 10) return { ...base, ideas: [], note: "Fiyat < $10 — opsiyon spread'leri genelde verimsiz." };
   if (!allowed.size) return { ...base, ideas: [], note: d.dir === 0
-    ? (stress && (vol.regime === "zengin" || (vol.ivhv ?? 0) >= 1.1)
+    ? (OCFG.LONG_ONLY ? "Yön yok → opsiyon ALIMI için gerekçe yok (BEKLE). (Yalnız alım modu: satış içeren yapı önerilmez.)"
+      : stress && (vol.regime === "zengin" || (vol.ivhv ?? 0) >= 1.1)
       ? "Oynaklık pahalı ama vade yapısı belirgin ters (stres) → yönsüz prim satışı yapılmaz (BEKLE)."
       : "Yön yok ve oynaklık pahalı değil → avantajlı opsiyon yapısı yok (BEKLE).")
     : "Uygun yapı yok." };
@@ -71,6 +78,9 @@ export async function analyzeOptions(sym, { spot, daily, r, hist = null, top = 3
     const expMs = ex.exp * 1e3 + 20 * 3600e3;
     const earnInside = chain.earningsTs && chain.earningsTs * 1e3 > now && chain.earningsTs * 1e3 < expMs;
     let allow = new Set(allowed);
+    // Alınan tek opsiyon vadeye 21 gün kala kapatılır → en az 35 gün vade (en az ~2 hafta tutma süresi; zaman erimesi
+    // son haftalarda hızlanır, alıcı kısa vadeden kaçınır).
+    if (ex.dte < 35) { allow.delete("LONG_CALL"); allow.delete("LONG_PUT"); }
     if (earnInside) ["BULL_PUT", "BEAR_CALL", "IRON_CONDOR"].forEach(k => allow.delete(k));   // bilanço boşluğuna prim SATMA
     if (!allow.size) continue;
 
@@ -107,6 +117,8 @@ export async function analyzeOptions(sym, { spot, daily, r, hist = null, top = 3
       ideas.push({ ...c, exp: ex.exp, dte: ex.dte, expDate: new Date(ex.exp * 1e3).toISOString().slice(0, 10), ivEx, sigP, earnInside, ev: e.ev, evVol, evDir: e.ev - evVol, evAdj, pop: e.pop, cvar5: e.cvar5, popMkt: m.pop, edge: e.ev / c.maxLoss, edgeAdj: edge, score });
     }
   }
+  // İkinci emniyet: yalnız-alım modunda satış bacağı içeren hiçbir yapı listeye giremez.
+  if (OCFG.LONG_ONLY) for (let k = ideas.length - 1; k >= 0; k--) if (ideas[k].legs.some(l => l.side < 0)) ideas.splice(k, 1);
   ideas.sort((a, b) => b.score - a.score);
   // Çeşitlilik: önce farklı stratejiler, sonra aynı stratejinin farklı vadeleri, en son kalanlar
   const picked = [], key = (i, k) => k === 0 ? i.code : `${i.code}|${i.exp ?? i.ex?.exp}`;
