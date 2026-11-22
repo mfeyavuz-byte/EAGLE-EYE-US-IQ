@@ -58,9 +58,10 @@ export function exitValue(legs, ch) {
 }
 
 // Kural kontrolü — sıra: zarar durdur, kısa strike, kâr al, süre.
-export function checkRules(b, pnl, S, dteLeft) {
+export function checkRules(b, pnl, S, dteLeft, today = null) {
   const r = b.rules;
   if (!r) return dteLeft <= 0 ? "vade" : null;
+  if (r.exitBy && today && today >= r.exitBy) return "bilanço öncesi";   // IV çöküşüne girme
   if (r.sl != null && pnl <= r.sl) return "zarar durdur";
   if (r.breakShort && S != null) {
     const broke = b.legs.some(l => l.side < 0 && (l.type === "P" ? S < l.K : S > l.K));
@@ -94,7 +95,7 @@ export async function markBook(book, today, getChain) {
       b.mark = { d: today, pnl, S: ch.S != null ? +(+ch.S).toFixed(2) : null };
       b.hi = Math.max(b.hi ?? pnl, pnl); b.lo = Math.min(b.lo ?? pnl, pnl); b.nm = (b.nm || 0) + 1;
       marked++;
-      const reason = checkRules(b, pnl, ch.S, days(today, b.exp));
+      const reason = checkRules(b, pnl, ch.S, days(today, b.exp), today);
       if (reason) { b.closed = { d: today, pnl, reason, days: days(b.date, today) }; closed.push(b); }
     }
   }

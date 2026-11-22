@@ -8,7 +8,9 @@
 //        OPT_FORCE=1 (opsiyon fikirlerini saat beklemeden üret) · IV_FORCE=1 (IV geçmişi kaydını zorla)
 //        MARK_FORCE=1 (karnedeki açık fikirleri saat beklemeden değerle)
 import { scanAll, analyze, spyReturn60, loadUniverse, dailyCache, CFG, setMomCuts } from "../spot/scan.mjs";
-import { logSignals, score, fmtSpotReport } from "./spotbook.mjs";
+import { logSignals, score, fmtSpotReport, checkExits, fmtExits, tradingDays, HOLD_DAYS } from "./spotbook.mjs";
+import { addWatch, removeWatch, checkWatch, fmtWatch } from "./watch.mjs";
+import { paperEnabled, runPaper, paperSummary } from "./paper.mjs";
 import { liveQuotes, alpacaEnabled, news } from "../data/alpaca.mjs";
 import { isMarketOpen, nyDate, nyParts, fmtTR } from "../data/market.mjs";
 import { riskFreeRate, fetchDaily, optionChain } from "../data/yahoo.mjs";
@@ -30,14 +32,26 @@ const DISCLAIMER = "⚠ Yatırım tavsiyesi değildir.";
 
 // Günlük üst sınır: filtreyi geçenlerden yalnızca en kaliteli ilk N yeni sinyal gönderilir (gürültü freni).
 export const DAY_CAP = { AL: +(process.env.MAX_AL_DAY || 10), SAT: +(process.env.MAX_SAT_DAY || 6) };
+// Sektör sınırı: aynı gün aynı sektörden en çok SEC_CAP sinyal (aynı yönde) — 3 biyoteknoloji = tek bahis.
+export const SEC_CAP = +(process.env.SEC_CAP || 3);
+// Pozisyon boyutu (AL): portföyün RISK_SPOT'u stop'a kadar riske → boyut = risk ÷ stop mesafesi, en çok %MAX_POS.
+export const RISK_SPOT = +(process.env.RISK_SPOT || 0.01), MAX_POS = +(process.env.MAX_POS || 0.10);
+export const sizeFor = s => (s.signal === "AL" && s.stopLoss && s.price > s.stopLoss)
+  ? +Math.min(MAX_POS, RISK_SPOT / ((s.price - s.stopLoss) / s.price)).toFixed(3) : null;
 // signals kalite sırasıyla gelir (scanAll). Aynı gün aynı sinyal tekrar gönderilmez; kota dolunca kalanlar bekler.
-export function pickFresh(signals, sent, cap = DAY_CAP) {
+export function pickFresh(signals, sent, cap = DAY_CAP, secOf = s => UNI.meta?.[s]?.sec || null) {
   sent.n ||= { AL: 0, SAT: 0 };
+  sent.sec ||= {};
   const out = [];
   for (const s of signals) {
     if (sent.map[s.sym] === s.signal) continue;
     if ((sent.n[s.signal] || 0) >= (cap[s.signal] ?? 0)) continue;
-    sent.map[s.sym] = s.signal; sent.n[s.signal] = (sent.n[s.signal] || 0) + 1; out.push(s);
+    const sec = secOf(s.sym), sk = sec && `${s.signal}|${sec}`;
+    if (sk && (sent.sec[sk] || 0) >= SEC_CAP) continue;
+    sent.map[s.sym] = s.signal; sent.n[s.signal] = (sent.n[s.signal] || 0) + 1;
+    if (sk) sent.sec[sk] = (sent.sec[sk] || 0) + 1;
+    s.sizePct = sizeFor(s);
+    out.push(s);
   }
   return out;
 }
@@ -55,11 +69,12 @@ export function fmtSignal(a) {
   if (a.stopLoss) parts.push(`stop ${usd(a.stopLoss)}`);
   if (a.target1) parts.push(`hedef ${usd(a.target1)}`);
   if (a.rr) parts.push(`R:R ${a.rr}`);
+  if (a.sizePct) parts.push(`boyut ~%${Math.round(a.sizePct * 100)} portföy`);
   if (a.dip) parts.push("DİP");
   return parts.join(" · ");
 }
 
-const SIG_KEYS = ["sym", "signal", "price", "confidence", "adx", "rsi", "rs60", "stopLoss", "target1", "rr", "dip", "mom12", "hi52"];
+const SIG_KEYS = ["sym", "signal", "price", "confidence", "adx", "rsi", "rs60", "stopLoss", "target1", "rr", "dip", "mom12", "hi52", "sizePct"];
 export const compactSignal = a => Object.fromEntries(SIG_KEYS.map(k => [k, a[k]]));
 
 // /sinyaller: filtreyi geçen TÜM sinyaller, AL ve SAT ayrı başlıklarla (kalite sırasıyla). Kesme yok.
@@ -102,6 +117,9 @@ const HELP = [
   "/sinyaller — son taramanın AL/SAT listesi",
   "/karne — gönderilen opsiyon fikirlerinin gerçekleşen sonuçları (model isabeti)",
   "/spotkarne — gönderilen spot sinyallerinin son 30 gündeki sonucu (SPY'a göre)",
+  "/takip SEMBOL — sahip olduğun hisseyi izle (SAT seçimi, 200g kırılımı, zirveden −%8 uyarısı)",
+  "/birak SEMBOL — takipten çıkar · /takiplerim — takip listesi",
+  "/portfoy — model portföy (Alpaca paper; PAPER_TRADE=1 ise)",
   "/durum — bot durumu",
   "/yardim — bu liste",
 ].join("\n");
@@ -112,13 +130,15 @@ function spotScored(st) {
   const p = st.lastPx?.p || {};
   return score(st.spotBook || [], s => p[s], st.lastPx?.spy);
 }
-export function weeklyReport(st, today) {
+export function weeklyReport(st, today, paperTxt = null) {
   const sc = spotScored(st);
   const open = (st.optBook || []).filter(b => !b.closed);
   const L = [`📅 HAFTALIK RAPOR — ${today}`, "",
     fmtSpotReport(sc, daysAgo(today, 7), "📈 Bu haftanın spot sinyalleri"), "",
     fmtSpotReport(sc, daysAgo(today, 30), "📈 Son 30 gün"), "",
     fmtStats(stats(st.optBook || []))];
+  if (paperTxt) L.push("", paperTxt);
+  if (Object.keys(st.watch || {}).length) L.push("", fmtWatch(st));
   if (open.length) {
     L.push("", "Açık opsiyon fikirleri:");
     for (const b of open) L.push(`• ${b.sym} ${b.code} ${b.legs.map(l => l.K + l.type).join("/")} (${b.exp}) · ${b.mark ? `güncel K/Z ${b.mark.pnl >= 0 ? "+" : ""}$${b.mark.pnl}` : "henüz değerlenmedi"}`);
@@ -156,6 +176,19 @@ async function handleCommands(st, ivStore, ctx) {
       await sendTG(fmtAnalysis(res));
     } else if (cmd === "/karne") {
       await sendTG(fmtStats(stats(st.optBook || [])));
+    } else if (cmd === "/takip") {
+      if (!sym) { await sendTG("Kullanım: /takip SEMBOL (örn. /takip AAPL)"); continue; }
+      const a = await analyze(sym, { live: (await liveQuotes([sym]))[sym] || null, spyRet60: (await ctx.spy()).ret60 }).catch(() => null);
+      if (!a) { await sendTG(`⚠ ${sym}: veri alınamadı.`); continue; }
+      await sendTG(addWatch(st, sym, a.price, nyDate())
+        ? `👁 ${sym} takibe alındı ($${a.price}). SAT seçimi, 200g ortalama kırılımı ve zirveden −%8 geri çekilmede uyarı gelir.`
+        : `${sym} zaten takipte.`);
+    } else if (cmd === "/birak") {
+      await sendTG(removeWatch(st, sym) ? `${sym} takipten çıkarıldı.` : `${sym || "?"} takipte değil.`);
+    } else if (cmd === "/takiplerim") {
+      await sendTG(fmtWatch(st));
+    } else if (cmd === "/portfoy") {
+      await sendTG((await paperSummary(st)) || "Model portföy kapalı. Açmak için repo → Settings → Secrets and variables → Actions → Variables → PAPER_TRADE = 1.");
     } else if (cmd === "/spotkarne") {
       const today = nyDate();
       await sendTG(fmtSpotReport(spotScored(st), daysAgo(today, 30), "📈 SPOT SİNYAL KARNESİ — son 30 gün") +
@@ -270,23 +303,49 @@ export async function main() {
   if (fresh.length || firstOfDay) {
     const al = fresh.filter(s => s.signal === "AL"), sat = fresh.filter(s => s.signal === "SAT");
     let m = `🇺🇸 ABD SPOT SİNYALLERİ${firstOfDay ? " — seans açılışı" : " — yeni"}\n${fmtTR()} (TR) · SPY 60g ${sgn(spy.ret60)}%\n` +
-      (firstOfDay ? "AL = momentum lideri geri çekilmede (ufuk ~1 ay) · SAT = teyitli düşüş + zayıf momentum\n" : "");
+      (firstOfDay ? `AL = momentum lideri geri çekilmede (ufuk ~1 ay; stop/hedef/21 gün dolunca ÇIKIŞ mesajı gelir) · SAT = teyitli düşüş + zayıf momentum\nBoyut: stop'a kadar portföyün %${RISK_SPOT * 100}'i riske, tek hisse en çok %${MAX_POS * 100} · sektör başına en çok ${SEC_CAP}\n` : "");
     // Kesme YOK: liste zaten günlük kotayla sınırlı; uzun mesaj sendTG'de satır sınırından parçalanır.
     if (al.length) m += `\nAL (${al.length})\n` + al.map(fmtSignal).join("\n") + "\n";
     if (sat.length) m += `\nSAT (${sat.length})\n` + sat.map(fmtSignal).join("\n") + "\n";
     if (!al.length && !sat.length) m += "\nFiltreyi geçen yeni sinyal yok.\n";
     if (analyzed === 0) m += "\n⚠ Hiçbir sembol analiz edilemedi — veri kaynağı sorunu olabilir.\n";
-    if (held) m += `\n(+${held} sinyal daha filtreyi geçti; günlük kota AL ${DAY_CAP.AL} / SAT ${DAY_CAP.SAT} — liste: /sinyaller)\n`;
+    if (held) m += `\n(+${held} sinyal daha filtreyi geçti; günlük kota AL ${DAY_CAP.AL} / SAT ${DAY_CAP.SAT}, sektör başına ${SEC_CAP} — liste: /sinyaller)\n`;
     m += `\n${analyzed}/${SYMS.length} hisse tarandı · SAT = spotta çık/girme · ${DISCLAIMER}`;
     if (await sendTG(m)) {
       st.lastHeaderDay = today;
       logSignals((st.spotBook ||= []), fresh, today, spyPx);           // canlı spot karnesi
     } else {
       // Gönderilemeyen sinyaller "gönderildi" sayılmaz → sonraki run'da tekrar denenir (kaybolmaz).
-      for (const s of fresh) { delete st.sent.map[s.sym]; st.sent.n[s.signal]--; }
+      for (const s of fresh) {
+        delete st.sent.map[s.sym]; st.sent.n[s.signal]--;
+        const sec = UNI.meta?.[s.sym]?.sec, sk = sec && `${s.signal}|${sec}`;
+        if (sk && st.sent.sec?.[sk]) st.sent.sec[sk]--;
+      }
       console.error(`⚠ Spot mesajı gönderilemedi — ${fresh.length} sinyal sonraki run'da tekrar denenecek.`);
     }
   } else console.log("Yeni spot sinyali yok — mesaj gönderilmedi.");
+
+  // --- TAKİP LİSTESİ uyarıları ---
+  if (Object.keys(st.watch || {}).length) {
+    const alerts = checkWatch(st, new Map(all.map(a => [a.sym, a])), today);
+    if (alerts.length) await sendTG("👁 TAKİP UYARISI\n\n" + alerts.join("\n") + `\n\n${DISCLAIMER}`);
+  }
+
+  // --- MODEL PORTFÖY (Alpaca paper, PAPER_TRADE=1): yeni AL'leri al, süresi dolanları kapat ---
+  if (paperEnabled()) {
+    const newAls = (fresh || []).filter(s => s.signal === "AL" && st.sent.map[s.sym] === "AL");
+    const lines = await runPaper(st, today, newAls, tradingDays, { risk: RISK_SPOT, maxPos: MAX_POS, hold: HOLD_DAYS });
+    if (lines.length) await sendTG("💼 MODEL PORTFÖY (paper)\n" + lines.join("\n"));
+  }
+
+  // --- SPOT ÇIKIŞLARI: kayıtlı AL'lerde stop / hedef / 21 işlem günü; SAT'larda 21 gün sonucu ---
+  if (st.spotBook?.length) {
+    const px = new Map(all.map(a => [a.sym, a.price]));
+    const exits = checkExits(st.spotBook, today, s => px.get(s), spyPx);
+    if (exits.length && !(await sendTG(fmtExits(exits) + `\n\nℹ Fiyatlar tarama anındaki son fiyattır. ${DISCLAIMER}`))) {
+      exits.forEach(b => { delete b.closed; });                       // gönderilemedi → sonraki run'da tekrar
+    }
+  }
   // /sinyaller için filtreyi geçen TÜM sinyaller (kısa alanlarla — Gist boyutu küçük kalsın)
   st.lastScan = { at: fmtTR(), analyzed, signals: signals.map(compactSignal) };
 
@@ -341,7 +400,7 @@ export async function main() {
   const { wd } = nyParts();
   if ((wd === "Fri" && mins >= 930 && st.lastWeekly !== today) || process.env.WEEKLY_FORCE === "1") {
     st.lastWeekly = today;
-    await sendTG(weeklyReport(st, today));
+    await sendTG(weeklyReport(st, today, await paperSummary(st)));
   }
 
   // --- IV geçmişi: günde 1 (15:00 NY sonrası) → IV rank zamanla oluşur ---

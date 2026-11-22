@@ -113,3 +113,52 @@ test("/sinyaller: filtreyi geçen tüm sinyaller listelenir (kesme yok)", async 
   const all = chunks(txt).join("\n");
   for (const s of sigs) assert.ok(all.includes(`${s.sym} $`), s.sym);
 });
+
+test("spot çıkış: stop / hedef / 21 işlem günü; SAT 21 gün sonra ölçülür", async () => {
+  const { logSignals, checkExits, tradingDays, score } = await import("../bot/spotbook.mjs");
+  assert.equal(tradingDays("2026-11-20", "2026-11-23"), 1);                 // Cuma → Pazartesi
+  const book = [];
+  logSignals(book, [
+    { sym: "A", signal: "AL", price: 100, stopLoss: 95, target1: 110 },
+    { sym: "B", signal: "AL", price: 50, stopLoss: 45, target1: 60 },
+    { sym: "C", signal: "AL", price: 20, stopLoss: 18, target1: 24 },
+    { sym: "D", signal: "SAT", price: 30 },
+  ], "2026-11-02", 600);
+  logSignals(book, [{ sym: "A", signal: "AL", price: 101 }], "2026-11-03", 600);   // açık aynı sinyal tekrar açılmaz
+  assert.equal(book.length, 4);
+  const px = { A: 94, B: 61, C: 21, D: 27 };
+  const d1 = checkExits(book, "2026-11-10", s => px[s], 606);
+  assert.deepEqual(d1.map(b => [b.sym, b.closed.why]), [["A", "stop"], ["B", "hedef"]]);
+  assert.ok(Math.abs(book[0].closed.ex - (-0.06 - 0.01)) < 1e-9);         // SPY'a göre
+  const d2 = checkExits(book, "2026-12-01", s => px[s], 606);               // 21 işlem günü
+  assert.deepEqual(d2.map(b => [b.sym, b.closed.why]), [["C", "süre"], ["D", "süre"]]);
+  assert.equal(book[3].closed.ret, 0.1);                                    // SAT: 30 → 27 = sinyal yönünde +%10
+  assert.equal(score(book, () => null, 606).length, 4);                     // kapananlar fiyatsız da sayılır
+});
+
+test("sektör sınırı ve pozisyon boyutu", async () => {
+  const { pickFresh, sizeFor } = await import("../bot/run.mjs");
+  const sigs = ["A", "B", "C", "D", "E"].map(s => ({ sym: s, signal: "AL", price: 100, stopLoss: 95 }));
+  const sent = { date: "d", map: {} };
+  const out = pickFresh(sigs, sent, { AL: 10, SAT: 6 }, s => (s === "E" ? "Tech" : "Bio"));
+  assert.deepEqual(out.map(s => s.sym), ["A", "B", "C", "E"]);              // Bio en çok 3
+  assert.equal(sizeFor({ signal: "AL", price: 100, stopLoss: 95 }), 0.1);    // %1 / %5 = %20 → üst sınır %10
+  assert.equal(sizeFor({ signal: "AL", price: 100, stopLoss: 80 }), 0.05);   // %1 / %20 = %5
+});
+
+test("takip listesi uyarıları ve model portföy boyutu", async () => {
+  const { addWatch, checkWatch, removeWatch } = await import("../bot/watch.mjs");
+  const { qtyFor } = await import("../bot/paper.mjs");
+  const st = {};
+  assert.equal(addWatch(st, "X", 100, "2026-11-02"), true);
+  assert.equal(addWatch(st, "X", 100, "2026-11-02"), false);
+  const m = (price, a200, pick = null) => new Map([["X", { sym: "X", price, a200, pick }]]);
+  assert.deepEqual(checkWatch(st, m(110, 0.05), "2026-11-03"), []);
+  const a = checkWatch(st, m(100, -0.01, "SAT"), "2026-11-04");
+  assert.equal(a.length, 3);                                                // SAT + 200g kırılımı + zirveden −%9
+  assert.deepEqual(checkWatch(st, m(99, -0.02, "SAT"), "2026-11-04"), []);   // aynı gün tekrar yok
+  assert.equal(removeWatch(st, "X"), true);
+  assert.equal(qtyFor(100000, 50, 45, 0.01, 0.1), 200);                      // risk $1000 / $5 = 200, değer $10k ≤ %10
+  assert.equal(qtyFor(100000, 50, 49, 0.01, 0.1), 200);                      // %10 üst sınırı: $10k / $50
+  assert.equal(qtyFor(100000, 50, 55, 0.01, 0.1), 0);                        // stop fiyatın üstünde → alım yok
+});

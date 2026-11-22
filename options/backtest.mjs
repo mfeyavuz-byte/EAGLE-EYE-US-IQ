@@ -66,20 +66,35 @@ export function strikeCands(type, S, T, sigma, target = DELTA, n = 8) {
     .sort((a, b) => a.err - b.err).slice(0, n).map(x => x.K);
 }
 
-// Bir kontratın gün gün yürüyüşü — canlı botun kuralları (kapanış fiyatlarıyla).
-export function walk(bars, entryDay, exp) {
+// Çıkış kuralı seti: tp (+getiri), sl (−getiri), dte (vadeye kalan gün). null = o kural yok.
+export const LIVE_RULE = { name: "CANLI: +%100 / −%50 / 21g", tp: TP, sl: SL, dte: EXIT_DTE };
+export const RULE_VARIANTS = [
+  LIVE_RULE,
+  { name: "stopsuz: +%100 / — / 21g", tp: 1.0, sl: null, dte: 21 },
+  { name: "geniş stop: +%100 / −%70 / 21g", tp: 1.0, sl: -0.7, dte: 21 },
+  { name: "erken kâr: +%50 / −%50 / 21g", tp: 0.5, sl: -0.5, dte: 21 },
+  { name: "kâr almasız: — / −%50 / 21g", tp: null, sl: -0.5, dte: 21 },
+  { name: "yalnız süre: — / — / 21g", tp: null, sl: null, dte: 21 },
+  { name: "erken süre: +%100 / −%50 / 30g", tp: 1.0, sl: -0.5, dte: 30 },
+  { name: "+%150 / −%60 / 21g", tp: 1.5, sl: -0.6, dte: 21 },
+];
+
+// Bir kontratın gün gün yürüyüşü (kapanış fiyatlarıyla). Varsayılan: canlı botun kuralları.
+export function walk(bars, entryDay, exp, rule = LIVE_RULE) {
   const i0 = bars.findIndex(b => b.d >= entryDay);
   if (i0 < 0 || !(bars[i0].c > 0)) return null;
   const entry = bars[i0];
   for (let i = i0 + 1; i < bars.length; i++) {
     const b = bars[i], ret = b.c / entry.c - 1;
-    if (ret >= TP) return { entry, exit: b, reason: "kâr hedefi" };
-    if (ret <= SL) return { entry, exit: b, reason: "zarar durdur" };
-    if (dayDiff(b.d, exp) <= EXIT_DTE) return { entry, exit: b, reason: "süre" };
+    if (rule.tp != null && ret >= rule.tp) return { entry, exit: b, reason: "kâr hedefi" };
+    if (rule.sl != null && ret <= rule.sl) return { entry, exit: b, reason: "zarar durdur" };
+    if (rule.dte != null && dayDiff(b.d, exp) <= rule.dte) return { entry, exit: b, reason: "süre" };
   }
   const last = bars[bars.length - 1];
-  return last && last !== entry ? { entry, exit: last, reason: dayDiff(last.d, exp) <= EXIT_DTE ? "süre" : "açık" } : null;
+  return last && last !== entry ? { entry, exit: last, reason: dayDiff(last.d, exp) <= (rule.dte ?? 0) ? "süre" : "açık" } : null;
 }
+// Kaydedilmiş fiyat yolu ([[gün, kapanış], …]) üzerinde kural seti
+export const walkPath = (path, exp, rule) => walk(path.map(([d, c]) => ({ d, c })), path[0]?.[0], exp, rule);
 
 async function main() {
   const signalsOnly = process.env.BT_SIGNALS_ONLY === "1";
@@ -174,7 +189,7 @@ async function main() {
           const b = bars[c.s];
           if (!b?.length || !b.some(x => x.d === entryDay && x.c > 0)) continue;
           const w = walk(b, entryDay, exp);
-          if (w) { res[role] = { ...w, K: c.K, type: c.type, occ: c.s }; break; }
+          if (w) { res[role] = { ...w, K: c.K, type: c.type, occ: c.s, path: b.filter(x => x.d >= w.entry.d).map(x => [x.d, x.c]) }; break; }
         }
       }
       if (!res.sig || !res.ctl) { miss++; return; }
@@ -231,6 +246,20 @@ export function report(trades) {
     }
   }
   const c = 0.03;
+  // ── Çıkış kuralı karşılaştırması: aynı fiyat yolları, farklı kurallar (maliyet %3) ──
+  if (trades.some(t => t.sig.path)) {
+    L.push("", "── ÇIKIŞ KURALLARI (aynı işlemler, maliyet %3) ──");
+    const exp = t => t.exp;
+    for (const rule of RULE_VARIANTS) {
+      const legs = (side) => trades.map(t => t[side].path ? walkPath(t[side].path, exp(t), rule) : null).filter(Boolean);
+      L.push(line(rule.name, summarize(legs("sig"), c)));
+    }
+    L.push("  (kontrol tarafı, aynı kurallar)");
+    for (const rule of RULE_VARIANTS) {
+      const legs = trades.map(t => t.ctl.path ? walkPath(t.ctl.path, exp(t), rule) : null).filter(Boolean);
+      L.push(line("  " + rule.name, summarize(legs, c)));
+    }
+  }
   L.push("", "── Yıllara göre (maliyet %3) ──");
   for (const y of [...new Set(trades.map(t => t.d.slice(0, 4)))].sort()) {
     const g = trades.filter(t => t.d.startsWith(y));

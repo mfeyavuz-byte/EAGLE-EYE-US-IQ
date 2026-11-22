@@ -42,6 +42,7 @@ jobs:
           GIST_ID: ${{ secrets.GIST_ID }}
           ALPACA_KEY_ID: ${{ secrets.ALPACA_KEY_ID }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          PAPER_TRADE: ${{ vars.PAPER_TRADE }}
           FORCE: ${{ inputs.force && '1' || '' }}
         run: |
           set +e

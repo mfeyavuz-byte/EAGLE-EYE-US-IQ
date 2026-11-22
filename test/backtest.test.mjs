@@ -42,3 +42,13 @@ test("özet: maliyet K/Z'yi düşürür", () => {
   assert.ok(s3.pnl < s0.pnl && s3.pnl > 80);
   assert.equal(s0.days, 10);
 });
+
+test("çıkış kuralı varyantları aynı fiyat yolunda farklı sonuç verir", async () => {
+  const { walkPath, RULE_VARIANTS } = await import("../options/backtest.mjs");
+  const path = [["2024-03-04", 2], ["2024-03-05", 0.9], ["2024-03-12", 3.5], ["2024-03-20", 4.4], ["2024-03-29", 5]];
+  const by = Object.fromEntries(RULE_VARIANTS.map(r => [r.name, walkPath(path, "2024-04-19", r)]));
+  assert.equal(by["CANLI: +%100 / −%50 / 21g"].reason, "zarar durdur");            // 0.9 → −%55
+  assert.equal(by["stopsuz: +%100 / — / 21g"].exit.c, 4.4);                         // +%120 → kâr hedefi
+  assert.equal(by["geniş stop: +%100 / −%70 / 21g"].reason, "kâr hedefi");
+  assert.equal(by["yalnız süre: — / — / 21g"].exit.d, "2024-03-29");                // vadeye 21 gün
+});

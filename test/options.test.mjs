@@ -252,3 +252,16 @@ test("olağandışı opsiyon hacmi", async () => {
   const u = unusualOptions(ch);
   assert.deepEqual(u.map(x => x.K), [100]);
 });
+
+test("bilanço öncesi çıkış: simülasyon ve karne aynı kuralı uygular", async () => {
+  const { simulateManaged } = await import("../options/sim.mjs");
+  const { checkRules } = await import("../options/book.mjs");
+  const S0 = 100, T = 60 / 365, r = 0.04, iv = 0.3, px = bs("C", S0, 100, T, r, 0, iv).price;
+  const o = simulateManaged({ S0, T, sigma: iv, mu: r, r, legs: [{ type: "C", K: 100, side: 1, iv, sp: 0 }], debit: px,
+    rules: { tp: 1e9, sl: -1e9, dte: 0, maxDays: 10 }, n: 500 });
+  assert.equal(o.reasons["bilanço öncesi"], 1);
+  assert.ok(o.days >= 10 && o.days < 12);
+  const b = { legs: [], rules: { tp: 500, sl: -250, dte: 21, exitBy: "2026-12-09" } };
+  assert.equal(checkRules(b, 10, 100, 40, "2026-12-08"), null);
+  assert.equal(checkRules(b, 10, 100, 40, "2026-12-09"), "bilanço öncesi");
+});

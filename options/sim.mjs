@@ -32,14 +32,15 @@ function normals(rand) {
 }
 
 // legs: [{type, K, side, iv, sp}] (sp: girişteki spread oranı) · debit: hisse başına ödenen (dolum dahil)
-// rules: {tp, sl, dte} ($/kontrat, gün) · T: vadeye yıl · sigma: fiziksel yıllık oynaklık · mu: yıllık kayma
+// rules: {tp, sl, dte, maxDays?} ($/kontrat, gün; maxDays: bilanço öncesi en geç çıkış, takvim günü)
+// T: vadeye yıl · sigma: fiziksel yıllık oynaklık · mu: yıllık kayma
 export function simulateManaged({ S0, T, sigma, mu, r, q = 0, legs, debit, rules, n = 2000, volOfVol = 0.15, seed = 7 }) {
   const days = Math.max(1, Math.round(T * 365));
   const tradingDays = Math.max(1, Math.round(days * 252 / 365));
   const dt = T / tradingDays;
   const rand = rng(seed), N = normals(rand);
   const pnls = new Float64Array(n), held = new Float64Array(n);
-  const reasons = { "kâr hedefi": 0, "zarar durdur": 0, "süre": 0, "vade": 0 };
+  const reasons = { "kâr hedefi": 0, "zarar durdur": 0, "süre": 0, "bilanço öncesi": 0, "vade": 0 };
   const value = (S, tau) => {
     let v = 0;
     for (const l of legs) {
@@ -62,6 +63,7 @@ export function simulateManaged({ S0, T, sigma, mu, r, q = 0, legs, debit, rules
       if (rules?.sl != null && pnl <= rules.sl) why = "zarar durdur";
       else if (rules?.tp != null && pnl >= rules.tp) why = "kâr hedefi";
       else if (rules?.dte != null && calLeft <= rules.dte) why = "süre";
+      else if (rules?.maxDays != null && d * 365 / 252 >= rules.maxDays) why = "bilanço öncesi";   // IV çöküşüne girme
       else if (d === tradingDays) why = "vade";
       if (why) { out = { pnl, d, why }; break; }
     }

@@ -32,6 +32,7 @@ export function fmtIdea(i, sym, n = null) {
     ...(i.evM != null ? [
       `Yönetilen işlem (kurallarla, ${i.simN || "2.000"} senaryo): kazanma %${Math.round(i.popM * 100)} · EV ${sgUsd(i.evM)} (riskin ${sg(i.edgeM * 100)}%) · ort. ${Math.round(i.daysM)} gün`,
       `  ↳ çıkışlar: kâr hedefi %${Math.round((i.exitsM["kâr hedefi"] || 0) * 100)} · zarar durdur %${Math.round((i.exitsM["zarar durdur"] || 0) * 100)} · süre %${Math.round(((i.exitsM["süre"] || 0) + (i.exitsM["vade"] || 0)) * 100)}` +
+        (i.exitsM["bilanço öncesi"] ? ` · bilanço öncesi %${Math.round(i.exitsM["bilanço öncesi"] * 100)}` : "") +
         (Math.abs(i.evMDir) >= 1 ? ` · EV kaynağı: fiyatlama ${sgUsd(i.evMVol)} / yön ${sgUsd(i.evMDir)}` : ""),
       `Vadeye kadar tutulsa: kâr olasılığı %${Math.round(i.pop * 100)} (piyasa %${Math.round(i.popMkt * 100)}) · EV ${sgUsd(i.evAdj)}`,
     ] : [

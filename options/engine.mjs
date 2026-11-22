@@ -145,6 +145,13 @@ export async function analyzeOptions(sym, { spot, daily, r, hist = null, top = 3
   for (const c of pre.slice(0, OCFG.SIM_TOP)) {
     const legs = c.legs.map(l => ({ type: l.type, K: l.K, side: l.side, iv: l.iv, sp: l.mid ? (l.ask - l.bid) / l.mid : 0 }));
     const rules = rulesFor(c);
+    // Bilanço vade içinde → bilançodan 1 gün önce kapat (sonrasındaki IV çöküşüne girme). Elde tutma < 7 gün → aday değil.
+    if (c.earnInside && chain.earningsTs) {
+      const exitMs = chain.earningsTs * 1e3 - 864e5;
+      rules.exitBy = new Date(exitMs).toISOString().slice(0, 10);
+      rules.maxDays = Math.floor((exitMs - Date.now()) / 864e5);
+      if (rules.maxDays < 7) continue;
+    }
     const muSim = c.mu0 + OCFG.DIR_TRUST * (c.mu - c.mu0);
     const base = { S0: chain.S, T: c.T, sigma: c.sigP, r: chain.r, q: chain.q, legs, debit: c.debit, rules, n: OCFG.SIM_N };
     const sm = simulateManaged({ ...base, mu: muSim });
@@ -193,6 +200,10 @@ export function rulesFor(i) {
 
 export function manageRules(i) {
   const r = i.rules || rulesFor(i);
+  const earn = r.exitBy ? ` · ⚠ bilançodan önce, en geç ${r.exitBy.slice(8, 10)}.${r.exitBy.slice(5, 7)} kapanışında kapat (IV çöküşü)` : "";
+  return manageText(i, r) + earn;
+}
+function manageText(i, r) {
   if (i.kind === "credit") {
     const stopTxt = r.sl != null ? `zarar $${-r.sl}'a (2× kredi) ulaşırsa ya da kısa strike kırılırsa çık` : "kısa strike kırılırsa çık (maks zarar zaten sınırlı)";
     return `Maks kârın %50'sinde (+$${r.tp}) kapat · vadeye ${r.dte} gün kalınca kapat · ${stopTxt}`;

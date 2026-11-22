@@ -43,6 +43,14 @@ for (let di = 260; di < days.length - H; di += STEP) {
     let hi = 0; for (let j = k - 251; j <= k; j++) hi = Math.max(hi, r[j].high);
     const rets = []; for (let j = k - 19; j <= k; j++) rets.push(Math.log(r[j].close / r[j - 1].close));
     const m = rets.reduce((x, y) => x + y, 0) / rets.length;
+    // HACİMLİ ŞOK (bilanço/haber günü vekili): son 10 işlem gününde hacim ≥ 3× 50g ortalama olan en büyük
+    // günlük hareket. shock = o günün getirisi (kapanış/önceki kapanış), shockAge = kaç gün önce, gap = açılış boşluğu.
+    let shock = 0, shockAge = null, gap = 0;
+    let v50 = 0; for (let j = k - 60; j < k - 10; j++) v50 += r[j].volume || 0; v50 /= 50;
+    for (let j = k - 9; j <= k; j++) {
+      const dr = r[j].close / r[j - 1].close - 1;
+      if ((r[j].volume || 0) >= 3 * v50 && Math.abs(dr) > Math.abs(shock)) { shock = dr; shockAge = k - j; gap = r[j].open / r[j - 1].close - 1; }
+    }
     day.push({
       d, s, sec: meta[s]?.sec || "?",
       sig: a.signal, conf: a.confidence, adx: a.adx, rsi: a.rsi, htf: a.htf, passed: passes(a), dv: a.dollarVol, px: c,
@@ -50,7 +58,7 @@ for (let di = 260; di < days.length - H; di += STEP) {
       ret21: c / r[k - 21].close - 1, ret5: c / r[k - 5].close - 1, rs60: a.rs60 / 100,
       hi52: c / hi, a200: c / sma(r, k, 200) - 1, a50: c / sma(r, k, 50) - 1,
       vol20: Math.sqrt(rets.reduce((x, y) => x + (y - m) ** 2, 0) / (rets.length - 1) * 252),
-      spyUp, spyRet60,
+      spyUp, spyRet60, shock, shockAge, gap,
       fwd: r[k + H].close / c - 1, fwd10: r[Math.min(k + 10, r.length - 1)].close / c - 1,
     });
   }
