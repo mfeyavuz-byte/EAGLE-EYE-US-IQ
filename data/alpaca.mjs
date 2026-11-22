@@ -89,6 +89,13 @@ export async function optionBars(symbols, start, end) {
   return out;
 }
 
+// HABERLER (Benzinga akışı, Alpaca hesabıyla ücretsiz). Dönüş: [{ t, headline, source }] (yeniden eskiye) | []
+export async function news(symbol, limit = 5) {
+  if (!alpacaEnabled()) return [];
+  const j = await getJSON(`https://data.alpaca.markets/v1beta1/news?symbols=${encodeURIComponent(symbol)}&limit=${limit}&sort=desc`);
+  return (j?.news || []).map(n => ({ t: n.created_at, headline: String(n.headline || "").trim(), source: n.source || "" })).filter(n => n.headline);
+}
+
 // Piyasa açık mı? (resmî tatilleri bilir). Alpaca yoksa null → çağıran saat hesabına düşer.
 export async function alpacaClock() {
   if (!alpacaEnabled()) return null;

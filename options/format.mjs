@@ -2,6 +2,7 @@
 const pct = (v, d = 0) => (v == null ? "—" : (v * 100).toFixed(d) + "%");
 const usd = v => (v == null || !isFinite(v) ? "∞" : "$" + Math.round(v).toLocaleString("en-US"));
 const sg = (v, d = 1) => (v >= 0 ? "+" : "") + v.toFixed(d);
+const sgUsd = v => (v >= 0 ? "+" : "−") + usd(Math.abs(v));
 const trDate = iso => new Date(iso + "T12:00:00Z").toLocaleDateString("tr-TR", { day: "numeric", month: "short", year: "2-digit" });
 
 export function fmtLegs(i) {
@@ -28,11 +29,20 @@ export function fmtIdea(i, sym, n = null) {
     `${n ? n + ") " : ""}🎯 ${sym} — ${i.tr} · ${trDate(i.expDate)} (${i.dte}g)`,
     `${fmtLegs(i)} @ ${Math.abs(i.debit).toFixed(2)} ${credit ? "kredi" : "borç"}`,
     `Maks kâr ${usd(i.maxProfit)} · maks zarar ${usd(i.maxLoss)} · başabaş ${i.breakevens.map(b => "$" + b).join(" / ")}`,
-    `Kâr olasılığı %${Math.round(i.pop * 100)} (piyasa %${Math.round(i.popMkt * 100)}) · EV ${i.ev >= 0 ? "+" : ""}${usd(i.ev)} (riskin ${sg(i.edge * 100)}%)` +
-      (Math.abs(i.evDir) >= 1 ? `\n  ↳ EV kaynağı: fiyatlama farkı (oynaklık/skew) ${i.evVol >= 0 ? "+" : ""}${usd(i.evVol)} · yön tahmini ${i.evDir >= 0 ? "+" : ""}${usd(i.evDir)}` : ""),
-    `Kötü senaryo (en kötü %5 ort.) ${usd(i.cvar5)} · Δ ${sg(i.greeks.delta)} · Θ ${sg(i.greeks.theta, 2)}$/gün · Vega ${sg(i.greeks.vega, 2)}$`,
+    ...(i.evM != null ? [
+      `Yönetilen işlem (kurallarla, ${i.simN || "2.000"} senaryo): kazanma %${Math.round(i.popM * 100)} · EV ${sgUsd(i.evM)} (riskin ${sg(i.edgeM * 100)}%) · ort. ${Math.round(i.daysM)} gün`,
+      `  ↳ çıkışlar: kâr hedefi %${Math.round((i.exitsM["kâr hedefi"] || 0) * 100)} · zarar durdur %${Math.round((i.exitsM["zarar durdur"] || 0) * 100)} · süre %${Math.round(((i.exitsM["süre"] || 0) + (i.exitsM["vade"] || 0)) * 100)}` +
+        (Math.abs(i.evMDir) >= 1 ? ` · EV kaynağı: fiyatlama ${sgUsd(i.evMVol)} / yön ${sgUsd(i.evMDir)}` : ""),
+      `Vadeye kadar tutulsa: kâr olasılığı %${Math.round(i.pop * 100)} (piyasa %${Math.round(i.popMkt * 100)}) · EV ${sgUsd(i.evAdj)}`,
+    ] : [
+      `Kâr olasılığı %${Math.round(i.pop * 100)} (piyasa %${Math.round(i.popMkt * 100)}) · EV ${i.ev >= 0 ? "+" : ""}${usd(i.ev)} (riskin ${sg(i.edge * 100)}%)` +
+        (Math.abs(i.evDir) >= 1 ? `\n  ↳ EV kaynağı: fiyatlama farkı (oynaklık/skew) ${i.evVol >= 0 ? "+" : ""}${usd(i.evVol)} · yön tahmini ${i.evDir >= 0 ? "+" : ""}${usd(i.evDir)}` : ""),
+    ]),
+    `Kötü senaryo (en kötü %5 ort.) ${usd(i.cvarM ?? i.cvar5)} · Δ ${sg(i.greeks.delta)} · Θ ${sg(i.greeks.theta, 2)}$/gün · Vega ${sg(i.greeks.vega, 2)}$`,
     `Likidite: min OI ${i.oiMin} · ort. spread %${(i.spreadAvg * 100).toFixed(1)}${i.earnInside ? " · ⚠ bilanço vade içinde" : ""}`,
-    `Boyut: 1 kontrat riski ${usd(i.maxLoss)} → %2 kuralıyla en az ${usd(i.minAccount)} hesap${i.contracts > 0 ? ` (ayarlı hesapta ${i.contracts} kontrat)` : ""}`,
+    i.kellyF != null
+      ? `Boyut: ¼ Kelly → hesabın %${(i.riskFrac * 100).toFixed(1)}'i riske (tam Kelly %${(i.kellyF * 100).toFixed(1)}, üst sınır %2) · 1 kontrat ${usd(i.maxLoss)} → en az ${usd(i.minAccount)} hesap${i.contracts > 0 ? ` (ayarlı hesapta ${i.contracts} kontrat)` : ""}`
+      : `Boyut: 1 kontrat riski ${usd(i.maxLoss)} → %2 kuralıyla en az ${usd(i.minAccount)} hesap${i.contracts > 0 ? ` (ayarlı hesapta ${i.contracts} kontrat)` : ""}`,
     `Yönetim: ${i.manage}`,
   ];
   return L.join("\n");
@@ -41,6 +51,11 @@ export function fmtIdea(i, sym, n = null) {
 export function fmtAnalysis(res) {
   if (res.error) return `⚠ ${res.sym}: ${res.error}`;
   const L = [`📊 ${res.sym} OPSİYON ANALİZİ — $${res.S.toFixed(2)}`, fmtVol(res.vol), "", ...res.reasons.map(r => "• " + r)];
+  if (res.unusual?.length) {
+    L.push("", "🔥 Olağandışı opsiyon hacmi (hacim ≫ açık pozisyon → yeni büyük pozisyon olabilir):");
+    for (const u of res.unusual) L.push(`  ${u.K}${u.type} · ${trDate(new Date(u.exp * 1e3).toISOString().slice(0, 10))} (${u.dte}g) · hacim ${u.vol.toLocaleString("en-US")} / OI ${u.oi.toLocaleString("en-US")} · ~${usd(u.prem)} prim`);
+    L.push("  ℹ Alış mı satış mı olduğu bilinmez; yön kanıtı değil, dikkat işaretidir.");
+  }
   if (res.ideas.length) {
     L.push(`\nEn iyi ${res.ideas.length} yapı (${res.considered} aday arasından):\n`);
     res.ideas.forEach((i, k) => L.push(fmtIdea(i, res.sym, k + 1), ""));

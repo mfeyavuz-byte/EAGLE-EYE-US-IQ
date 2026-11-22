@@ -50,8 +50,8 @@ function verticals(code, list, S, d1, d2, farIsHigher, side1, wMin, wMax, okPric
 export function candidates(ex, S, allowed) {
   const C = ex.calls, P = ex.puts, out = [];
   const add = arr => arr.forEach(c => out.push({ ...c, ex }));
-  if (allowed.has("LONG_CALL")) add(C.filter(o => o.liquid && inR(o.delta, 0.5, 0.75)).map(o => build("LONG_CALL", ex, [{ o, side: +1 }])));
-  if (allowed.has("LONG_PUT")) add(P.filter(o => o.liquid && inR(o.delta, -0.75, -0.5)).map(o => build("LONG_PUT", ex, [{ o, side: +1 }])));
+  if (allowed.has("LONG_CALL")) add(C.filter(o => o.liquid && inR(o.delta, 0.35, 0.8)).map(o => build("LONG_CALL", ex, [{ o, side: +1 }])));
+  if (allowed.has("LONG_PUT")) add(P.filter(o => o.liquid && inR(o.delta, -0.8, -0.35)).map(o => build("LONG_PUT", ex, [{ o, side: +1 }])));
   // Borçlu: ödenen prim genişliğin %20–%70'i (çok ucuz = uzak/olasılıksız, çok pahalı = kötü R:R)
   const debitOK = (c, w) => c.debit > 0.2 * w && c.debit < 0.7 * w;
   if (allowed.has("BULL_CALL")) add(verticals("BULL_CALL", C, S, [0.4, 0.7], [0.15, 0.4], true, +1, 0.02, 0.12, debitOK));

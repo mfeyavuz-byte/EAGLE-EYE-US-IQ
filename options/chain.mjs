@@ -24,7 +24,8 @@ function enrich(list, type, S, T, r, q) {
 }
 
 // Hangi vadeler yüklenecek: ön (≥7g, analiz), işlem penceresi [minDte,maxDte] (en çok 3), arka (60–120g, vade yapısı).
-function pickExpiries(exps, nowSec, { minDte = 21, maxDte = 60, analyticsOnly = false } = {}) {
+// targets verilirse pencereden her hedef güne en yakın vade seçilir (yayılım: kısa/orta/uzun).
+export function pickExpiries(exps, nowSec, { minDte = 21, maxDte = 60, analyticsOnly = false, targets = null } = {}) {
   const withDte = exps.map(e => ({ e, dte: (e - nowSec) / 86400 })).filter(x => x.dte >= 5);
   const pick = new Set();
   const front = withDte.find(x => x.dte >= 7);
@@ -34,7 +35,8 @@ function pickExpiries(exps, nowSec, { minDte = 21, maxDte = 60, analyticsOnly = 
   if (!analyticsOnly) {
     const win = withDte.filter(x => x.dte >= minDte && x.dte <= maxDte);
     // pencereden en çok 3 vade: 38 güne en yakın + yayılım
-    win.sort((a, b) => Math.abs(a.dte - 38) - Math.abs(b.dte - 38)).slice(0, 3).forEach(x => pick.add(x.e));
+    if (targets) for (const t of targets) { const b = win.slice().sort((a, c) => Math.abs(a.dte - t) - Math.abs(c.dte - t))[0]; if (b) pick.add(b.e); }
+    else win.sort((a, b) => Math.abs(a.dte - 38) - Math.abs(b.dte - 38)).slice(0, 3).forEach(x => pick.add(x.e));
     const back = withDte.find(x => x.dte >= 60 && x.dte <= 130);
     if (back) pick.add(back.e);
   }

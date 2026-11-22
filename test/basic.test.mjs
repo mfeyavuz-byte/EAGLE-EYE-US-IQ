@@ -31,29 +31,40 @@ test("seans kesri ve NY tarihi", () => {
   assert.equal(nyDate(new Date("2026-07-16T02:00:00Z")), "2026-07-15");  // UTC ertesi gün, NY hâlâ 15'i
 });
 
-const base = { sym: "X", signal: "AL", confidence: 80, adx: 30, htf: "YUKARI", htfNote: "", dip: 0, dollarVol: 1e9, volPace: 1, rsi: 55, rs60: 2 };
-test("filtre: kaliteli AL geçer, zayıflar elenir", () => {
+const base = { sym: "X", signal: "AL", confidence: 80, adx: 30, htf: "YUKARI", htfNote: "", dip: 0, dollarVol: 1e9, volPace: 1, rsi: 55, rs60: 2,
+  mom12: 0.6, momRank: 0.9, hi52: 0.9, a200: 0.08 };
+test("AL kuralı: momentum lideri geri çekilmede", () => {
   assert.equal(passes(base), true);
-  assert.equal(passes({ ...base, confidence: 50 }), false);
-  assert.equal(passes({ ...base, adx: 10 }), false);
-  assert.equal(passes({ ...base, rsi: 70 }), false);
-  assert.equal(passes({ ...base, volPace: 0.4 }), false);
-  assert.equal(passes({ ...base, dollarVol: 1e6 }), false);
-  assert.equal(passes({ ...base, htf: "ASAGI" }), false);
-  assert.equal(passes({ ...base, htf: "ASAGI", adx: 10, dip: 2 }), true);  // dip dönüşü muaf
-  assert.equal(passes({ ...base, signal: "SAT", htf: "YUKARI" }), false);
-  assert.equal(passes({ ...base, rs60: -3 }), false);                      // AL: SPY'dan zayıfsa elenir
-  assert.equal(passes({ ...base, dollarVol: 30e6 }), false);               // 50M$ altı
+  assert.equal(passes({ ...base, signal: "NÖTR" }), true);                  // motor nötr olsa da seçilir
+  assert.equal(passes({ ...base, confidence: 40 }), true);                  // motor güveni şart değil
+  assert.equal(passes({ ...base, momRank: 0.7 }), false);                   // momentum en iyi %20'de değil
+  assert.equal(passes({ ...base, hi52: 0.97 }), false);                     // zirvede (geri çekilme yok)
+  assert.equal(passes({ ...base, a200: -0.02 }), false);                    // 200g ortalamanın altında
+  assert.equal(passes({ ...base, signal: "SAT", htf: "YUKARI" }), false);   // motor SAT → AL olmaz
+  assert.equal(passes({ ...base, dollarVol: 30e6 }), false);                // 50M$ altı
+  assert.equal(passes({ ...base, momRank: undefined }), false);             // sıra bilinmeden seçim yok
 });
 
-test("filtre: SAT yalnızca teyitli düşüşte", () => {
-  const sat = { ...base, signal: "SAT", confidence: 85, adx: 30, htf: "ASAGI", rsi: 38, rs60: -12 };
+test("SAT kuralı: teyitli düşüş + zayıf momentum", () => {
+  const sat = { ...base, signal: "SAT", confidence: 85, adx: 30, htf: "ASAGI", rsi: 38, rs60: -12, momRank: 0.2 };
   assert.equal(passes(sat), true);
-  assert.equal(passes({ ...sat, htf: "YAN" }), false);                     // haftalık trend aşağı değil
+  assert.equal(passes({ ...sat, momRank: 0.5 }), false);                    // momentum zayıf değil
+  assert.equal(passes({ ...sat, htf: "YAN" }), false);                      // haftalık trend aşağı değil
   assert.equal(passes({ ...sat, confidence: 75 }), false);
   assert.equal(passes({ ...sat, adx: 22 }), false);
-  assert.equal(passes({ ...sat, rs60: 4 }), false);                        // SPY'dan güçlü hisseye SAT yok
-  assert.equal(passes({ ...sat, rsi: 24 }), false);                        // zaten aşırı satılmış → geç
+  assert.equal(passes({ ...sat, rs60: 4 }), false);                         // SPY'dan güçlü hisseye SAT yok
+  assert.equal(passes({ ...sat, rsi: 24 }), false);                         // zaten aşırı satılmış → geç
+});
+
+test("kesitsel momentum sırası ve eşikler", async () => {
+  const { rankAndClassify, setMomCuts } = await import("../spot/scan.mjs");
+  const list = Array.from({ length: 50 }, (_, i) => ({ ...base, sym: "S" + i, signal: "NÖTR", mom12: i / 100, hi52: 0.9, a200: 0.05, atr: 2, price: 100 }));
+  const cuts = rankAndClassify(list);
+  assert.equal(list.filter(a => a.pick === "AL").length, 10);               // en iyi %20 → 10 hisse
+  assert.ok(list.find(a => a.sym === "S49").pick === "AL" && !list.find(a => a.sym === "S10").pick);
+  assert.equal(list.find(a => a.sym === "S49").stopLoss, 95);               // ATR seviyeleri: 100 − 2.5·2
+  assert.ok(Math.abs(cuts.top - 0.39) < 0.011);
+  setMomCuts(null);
 });
 
 test("günlük kota: en kaliteli N yeni sinyal, tekrar yok", () => {
@@ -74,7 +85,8 @@ test("SAT sinyalinde stop fiyatın üstünde, hedef altında", async () => {
 
 test("sinyal satırı biçimi", () => {
   const s = fmtSignal({ ...base, price: 123.4, stopLoss: 118, target1: 131, rr: 1.4 });
-  assert.match(s, /🟢 X \$123\.4 · güven %80/);
+  assert.match(s, /🟢 X \$123\.4 · mom12 \+60% · zirveye −10%/);
+  assert.match(fmtSignal({ ...base, signal: "SAT", price: 50 }), /🔴 X \$50 · güven %80 · ADX 30/);
   assert.match(s, /R:R 1\.4/);
 });
 

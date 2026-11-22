@@ -17,11 +17,30 @@ export const CFG = {
   MAX_RSI_BUY: env("MAX_RSI_BUY", 63),    // geç/aşırı-alım girişi ele
   MIN_RSI_SAT: env("MIN_RSI_SAT", 30),    // zaten aşırı satılmışa geç SAT verme (tahliye dibi)
   MIN_DVOL: env("MIN_DVOL", 50e6),        // günlük ort. işlem hacmi ($)
+  // AL = "MOMENTUM LİDERİ GERİ ÇEKİLMEDE" (research/ — 300 hisse, Haz 2023–Eki 2026, eğitim/test ayrı):
+  //   12 aylık momentum (son ay hariç) evrenin en iyi %20'sinde · 52 haftalık zirvenin %5–%25 altında ·
+  //   200 günlük ortalamanın üstünde · fiyat ≥ $10 · motor SAT demiyor. Günde ilk 10 (momentuma göre):
+  //   21 günde evrene göre +%2.1 (eğitim) / +%3.7 (test) fazla getiri; medyan +%0.3 → avantaj büyük kazananlardan
+  //   gelir (isabet ~%50). Eski motor-AL kuralı: −%0.5 / −%0.1 → kaldırıldı.
+  //   Zirveden %25+ düşmüş "piyango" hisseler (ör. +%600 sonrası −%50) bilerek dışarıda: ortalamaları yüksek
+  //   görünür ama hayatta kalan yanlılığı ve tek tük dev kazanan etkisi baskındır.
+  MOM_TOP: env("MOM_TOP", 0.8),
+  HI52_MAX: env("HI52_MAX", 0.95),
+  HI52_MIN: env("HI52_MIN", 0.75),
+  MIN_PRICE_AL: env("MIN_PRICE_AL", 10),
+  // SAT = motorun teyitli SAT'ı + momentumu zayıf (alt %30): 21 günde −%1.3 / −%1.1 (doğru yön).
+  MOM_SAT_MAX: env("MOM_SAT_MAX", 0.3),
   CONC: env("CONC", 8),
 };
 
-// Sıralama puanı: güven + trend gücü + göreli güç (sinyal yönünde) + hacim teyidi.
+// Momentum eşikleri (son tam taramadan): tek sembol analizinde (/hisse, /opsiyon) sıra bunlarla yaklaşık bulunur.
+let MOM_CUTS = null;
+export const setMomCuts = c => { MOM_CUTS = c && isFinite(c.top) ? c : null; };
+export const getMomCuts = () => MOM_CUTS;
+
+// Sıralama: AL → 12 aylık momentum (araştırmada en iyi sıralayıcı); SAT → güven + trend + göreli zayıflık.
 export function quality(a) {
+  if (a.signal === "AL" && a.mom12 != null) return 100 * a.mom12;
   const dir = a.signal === "SAT" ? -1 : 1;
   return a.confidence + Math.min(a.adx || 0, 40) / 2 + Math.max(0, Math.min(30, dir * (a.rs60 || 0))) / 2 + Math.min(a.volPace || 0, 2) * 5;
 }
@@ -80,41 +99,66 @@ export async function analyze(sym, { live = null, spyRet60 = 0, daily: pre = nul
   const price = last.close;
   const rr = k.target1 && k.stopLoss && price > k.stopLoss ? +((k.target1 - price) / (price - k.stopLoss)).toFixed(2) : 0;
   const { stopLoss, target1, target2 } = orientLevels(price, k.final, k);
+  // Faktörler: 12 aylık momentum (son ay hariç), 52 haftalık zirveye uzaklık, 200 günlük ortalamaya uzaklık
+  const n = daily.length;
+  const mom12 = n >= 253 && daily[n - 253].close > 0 ? daily[n - 22].close / daily[n - 253].close - 1 : null;
+  let hi = 0; for (let j = Math.max(0, n - 252); j < n; j++) hi = Math.max(hi, daily[j].high || daily[j].close);
+  let s200 = 0; if (n >= 200) { for (let j = n - 200; j < n; j++) s200 += daily[j].close; s200 /= 200; }
   const a = {
-    sym, price, live: !!live, signal: k.final, confidence: k.confidence, adx: Math.round(k.adx || 0),
+    sym, price, live: !!live, signal: k.final, engSignal: k.final, confidence: k.confidence, adx: Math.round(k.adx || 0),
     rsi: last.rsi != null ? Math.round(last.rsi) : null, htf: k.higherTrend, htfNote: k.htfNote || "",
     dip: k.dipSignal ? (k.dipSignal.score || 1) : 0, stopLoss, target1, target2,
     rr, atr: last.atr > 0 ? +last.atr.toFixed(2) : null, mod: k.mod, entryHint: k.entryHint,
     waitReasons: k.waitReasons, dollarVol: Math.round(avgVol * price), volPace,
     ret60: +ret60.toFixed(1), rs60: +(ret60 - spyRet60).toFixed(1),   // SPY'a göre göreli güç
+    mom12: mom12 != null ? +mom12.toFixed(4) : null, hi52: hi ? +(price / hi).toFixed(4) : null,
+    a200: s200 ? +(price / s200 - 1).toFixed(4) : null,
   };
-  a.passed = passes(a);   // opsiyon motoru yalnızca filtreyi geçen sinyale yön verir
+  if (MOM_CUTS && a.mom12 != null) a.momRank = a.mom12 >= MOM_CUTS.top ? 0.9 : a.mom12 <= MOM_CUTS.low ? 0.1 : 0.5;
+  classify(a);   // opsiyon motoru yalnızca filtreyi geçen sinyale yön verir
   return a;
 }
 
-// Kalite filtresi — bist-bot ile aynı kurallar, eşikler ABD için ayarlanabilir (env).
-export function passes(a) {
-  if (!a || a.signal === "NÖTR") return false;
-  if (a.dollarVol < CFG.MIN_DVOL) return false;
-  const isDip = a.dip > 0;
-  if (a.signal === "SAT") {
-    // SAT: yalnızca teyitli düşüş — haftalık trend AŞAĞI, güçlü trend, SPY'dan zayıf, henüz aşırı satılmamış.
-    if (a.confidence < CFG.MIN_CONF_SAT) return false;
-    if (a.htf !== "ASAGI") return false;
-    if (a.adx < CFG.MIN_ADX_SAT) return false;
-    if ((a.rs60 ?? 0) >= 0) return false;
-    if ((a.rsi ?? 50) < CFG.MIN_RSI_SAT) return false;
-    return true;
+// Hangi seçim? "AL" | "SAT" | null. a.momRank: 12 aylık momentumun evren içindeki yüzdelik sırası (0..1).
+export function pickOf(a) {
+  if (!a || !(a.dollarVol >= CFG.MIN_DVOL)) return null;
+  const eng = a.engSignal ?? a.signal;
+  if (a.momRank == null) return null;                                // sıra bilinmeden seçim yok
+  if (eng !== "SAT" && a.momRank >= CFG.MOM_TOP && a.hi52 != null && a.hi52 < CFG.HI52_MAX && a.hi52 >= CFG.HI52_MIN &&
+      (a.a200 ?? -1) > 0 && !(a.price < CFG.MIN_PRICE_AL)) return "AL";
+  if (eng === "SAT") {
+    // SAT: teyitli düşüş — haftalık trend AŞAĞI, güçlü trend, SPY'dan zayıf, henüz aşırı satılmamış, momentum zayıf.
+    if (a.confidence < CFG.MIN_CONF_SAT || a.htf !== "ASAGI" || a.adx < CFG.MIN_ADX_SAT) return null;
+    if ((a.rs60 ?? 0) >= 0 || (a.rsi ?? 50) < CFG.MIN_RSI_SAT || a.momRank > CFG.MOM_SAT_MAX) return null;
+    return "SAT";
   }
-  if (a.confidence < CFG.MIN_CONF) return false;
-  if (isDip) return true;                                            // dip dönüşü: trend/göreli güç şartı yok
-  if (a.adx < CFG.MIN_ADX) return false;
-  if (a.htfNote.includes("⚠")) return false;
-  if (a.htf === "ASAGI") return false;
-  if ((a.rs60 ?? 0) <= 0) return false;                              // AL: SPY'dan güçlü olmalı (göreli güç)
-  if (a.volPace < 0.7) return false;                                 // hacim kuruması = teyitsiz AL (seans temposuna göre)
-  if ((a.rsi || 0) >= CFG.MAX_RSI_BUY) return false;
-  return true;
+  return null;
+}
+export const passes = a => !!pickOf(a);
+
+// Seçimi analize işle: signal = seçim (yoksa motorun sinyali), passed, pick. AL seçiminde seviyeler ATR'den:
+// stop 2.5·ATR altı, hedef 5·ATR (R:R 2), tutma ufku ~21 işlem günü (araştırmanın ölçtüğü ufuk).
+export function classify(a) {
+  if (!a) return null;
+  a.engSignal ??= a.signal;
+  const pick = pickOf(a);
+  a.pick = pick; a.passed = !!pick; a.signal = pick || a.engSignal;
+  if (pick === "AL" && a.atr) {
+    a.stopLoss = +(a.price - 2.5 * a.atr).toFixed(2); a.target1 = +(a.price + 5 * a.atr).toFixed(2);
+    a.target2 = +(a.price + 7.5 * a.atr).toFixed(2); a.rr = 2;
+  }
+  return pick;
+}
+
+// Kesitsel sıra: likit hisseler içinde 12 aylık momentum yüzdeliği → seçimleri yeniden hesapla.
+// Dönüş: eşikler { top: %MOM_TOP yüzdeliği, low: %MOM_SAT_MAX yüzdeliği } (tek sembol analizi için saklanır).
+export function rankAndClassify(list) {
+  const liq = list.filter(a => a && a.mom12 != null && a.dollarVol >= CFG.MIN_DVOL).sort((a, b) => a.mom12 - b.mom12);
+  liq.forEach((a, i) => { a.momRank = liq.length > 1 ? i / (liq.length - 1) : 0.5; });
+  list.forEach(a => a && classify(a));
+  if (liq.length < 20) return null;
+  const at = p => liq[Math.min(liq.length - 1, Math.round(p * (liq.length - 1)))].mom12;
+  return { top: at(CFG.MOM_TOP), low: at(CFG.MOM_SAT_MAX), n: liq.length };
 }
 
 export async function scanAll(symbols, { liveMap = {}, spyRet60 = 0 } = {}) {
@@ -128,11 +172,15 @@ export async function scanAll(symbols, { liveMap = {}, spyRet60 = 0 } = {}) {
   for (let i = 0; i < symbols.length; i += conc) {
     const batch = symbols.slice(i, i + conc);
     const res = await Promise.all(batch.map(s => analyze(s, { live: liveMap[s], spyRet60, daily: bulk[s] }).catch(() => null)));
-    res.forEach(a => { if (a) { ok++; all.push(a); } if (passes(a)) out.push(a); });
+    res.forEach(a => { if (a) { ok++; all.push(a); } });
   }
+  // Momentum sırası tüm evren üzerinden (taranan küme çekirdekse eski eşikler korunur)
+  const cuts = symbols.length >= 200 ? rankAndClassify(all) : (all.forEach(a => classify(a)), null);
+  if (cuts) setMomCuts(cuts);
+  for (const a of all) if (a.passed) out.push(a);
   out.forEach(a => { a.q = +quality(a).toFixed(1); });
   out.sort((a, b) => a.signal !== b.signal ? (a.signal === "AL" ? -1 : 1) : b.q - a.q);
-  return { signals: out, analyzed: ok, all };
+  return { signals: out, analyzed: ok, all, cuts };
 }
 
 export async function spyReturn60() {

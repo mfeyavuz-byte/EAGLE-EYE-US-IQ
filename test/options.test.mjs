@@ -230,3 +230,25 @@ test("günlükten haftalık mum", () => {
   assert.equal(w.length, 2);
   assert.equal(w[0].close, 3.5); assert.equal(w[0].high, 13); assert.equal(w[0].volume, 4);
 });
+
+test("yönetilen işlem simülasyonu: adil fiyatlı ATM'de EV ≈ 0, pozitif kayma EV ve Kelly'yi artırır", async () => {
+  const { simulateManaged, kelly } = await import("../options/sim.mjs");
+  const S0 = 100, T = 50 / 365, r = 0.04, iv = 0.3, px = bs("C", S0, 100, T, r, 0, iv).price;
+  const legs = [{ type: "C", K: 100, side: 1, iv, sp: 0 }];
+  const fair = simulateManaged({ S0, T, sigma: iv, mu: r, r, legs, debit: px, rules: null, n: 6000 });
+  assert.ok(Math.abs(fair.ev / (px * 100)) < 0.04, `adil EV ${fair.ev}`);
+  assert.equal(kelly(fair.pnls, px * 100).f < 0.05, true);
+  const rules = { tp: px * 100, sl: -px * 50, dte: 21 };
+  const up = simulateManaged({ S0, T, sigma: iv, mu: r + 0.3, r, legs, debit: px, rules, n: 4000 });
+  assert.ok(up.ev > 0 && kelly(up.pnls, px * 100).f > 0);
+  assert.ok(Math.abs(Object.values(up.reasons).reduce((a, b) => a + b, 0) - 1) < 1e-9);
+  assert.ok(up.days < 50 - 21 + 1);                                         // süre kuralı: vadeye 21 gün kala çıkar
+});
+
+test("olağandışı opsiyon hacmi", async () => {
+  const { unusualOptions } = await import("../options/flow.mjs");
+  const o = (K, vol, oi, mid = 2, delta = 0.5) => ({ type: "C", K, vol, oi, mid, delta, spreadPct: 0.05 });
+  const ch = { expiries: [{ exp: 1798675200, dte: 40, calls: [o(100, 5000, 800), o(105, 500, 10), o(110, 1200, 5000), o(50, 9000, 0, 60, 0.99)], puts: [] }] };
+  const u = unusualOptions(ch);
+  assert.deepEqual(u.map(x => x.K), [100]);
+});

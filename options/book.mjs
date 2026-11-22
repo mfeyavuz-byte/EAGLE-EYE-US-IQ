@@ -23,6 +23,9 @@ export function addIdeas(book, ideas, date) {
       ev: Math.round(i.ev), pop: +i.pop.toFixed(3), popMkt: +i.popMkt.toFixed(3),
       maxLoss: Math.round(i.maxLoss), maxProfit: isFinite(i.maxProfit) ? Math.round(i.maxProfit) : null,
       rules: i.rules || null,
+      // yönetilen işlem simülasyonunun tahmini (gerçekçi karneyle kıyas için)
+      evM: i.evM != null ? Math.round(i.evM) : null, popM: i.popM != null ? +i.popM.toFixed(3) : null,
+      daysM: i.daysM != null ? Math.round(i.daysM) : null,
     });
   }
   if (book.length > MAX_BOOK) book.splice(0, book.length - MAX_BOOK);
@@ -138,6 +141,10 @@ export function stats(book) {
       n: nc, winRate: nc ? sum(c, b => (b.closed.pnl > 0 ? 1 : 0)) / nc : null,
       pnl: sum(c, b => b.closed.pnl), risk: sum(c, b => b.maxLoss),
       avgDays: nc ? sum(c, b => b.closed.days || 0) / nc : null, reasons,
+      // simülasyon tahmini (yalnız tahmini olan fikirler)
+      predN: c.filter(b => b.evM != null).length,
+      predEvM: sum(c.filter(b => b.evM != null), b => b.evM), predPopM: c.some(b => b.popM != null) ? sum(c.filter(b => b.popM != null), b => b.popM) / c.filter(b => b.popM != null).length : null,
+      realOfPred: sum(c.filter(b => b.evM != null), b => b.closed.pnl),
       // aynı fikirlerin vadeye kadar tutulmuş hali (yönetimin katkısı = gerçekçi − bu)
       holdPnl: sum(c.filter(b => b.settled), b => b.pnl), holdN: c.filter(b => b.settled).length,
       holdPnlSame: sum(c.filter(b => b.settled), b => b.closed.pnl),
@@ -162,6 +169,7 @@ export function fmtStats(st) {
       `Kapanan ${R.n} · kazanma oranı ${p(R.winRate)} · ort. ${R.avgDays.toFixed(0)} gün`,
       `Toplam K/Z ${sg(R.pnl)} · riske edilen $${R.risk.toLocaleString("en-US")} · getiri/risk ${(R.pnl / Math.max(1, R.risk) * 100).toFixed(1)}%`,
       `Kapanış nedenleri: ${Object.entries(R.reasons).map(([k, v]) => `${k} ${v}`).join(" · ")}`);
+    if (R.predN) L.push(`Simülasyonun tahmini (${R.predN} fikir): EV ${sg(R.predEvM)} · kazanma ${p(R.predPopM)} → gerçekleşen ${sg(R.realOfPred)}`);
     if (R.holdN) L.push(`Yönetimin katkısı (vadesi gelen ${R.holdN} fikirde): kurallarla ${sg(R.holdPnlSame)} vs vadeye kadar tutsan ${sg(R.holdPnl)}`);
   }
   if (st.open) L.push(`Açık ${st.open}${st.openMarked ? ` · güncel K/Z ${sg(st.openPnl)}` : ""}`);

@@ -3,7 +3,7 @@
 //
 // Yöntem (canlı botla aynı kurallar, geçmişe uygulanmış):
 //  1) Her BT_STEP işlem gününde (varsayılan haftalık) en likit BT_N hisse o günün kapanışına kadarki veriyle analiz
-//     edilir → spot kalite filtresi → kalite puanı sırası → en iyi BT_AL AL + BT_SAT SAT (opsiyon likiditesi için
+//     edilir → o günün kesitsel momentum sırası → canlı seçim kuralı (spot/scan.mjs) → en iyi BT_AL AL + BT_SAT SAT (opsiyon likiditesi için
 //     ort. işlem hacmi ≥ 150M$, fiyat ≥ $15).
 //  2) AL → long call, SAT → long put. Vade: giriş gününden ≥ 35 gün sonraki ilk aylık vade (3. Cuma).
 //     Strike: delta ≈ 0.60 (σ = 20 günlük gerçekleşen oynaklık ile), listelenmiş strike'lardan en yakını.
@@ -22,7 +22,7 @@
 // Çalıştırma: ALPACA_KEY_ID=… ALPACA_SECRET_KEY=… node options/backtest.mjs
 // Ayarlar: BT_N=120 BT_START=2024-03-01 BT_END=(bugün−30g) BT_STEP=5 BT_AL=5 BT_SAT=3 BT_DELTA=0.6
 import { writeFileSync } from "node:fs";
-import { analyze, passes, quality, loadUniverse } from "../spot/scan.mjs";
+import { analyze, quality, loadUniverse, rankAndClassify, setMomCuts } from "../spot/scan.mjs";
 import { fetchChart } from "../data/yahoo.mjs";
 import { alpacaEnabled, optionBars } from "../data/alpaca.mjs";
 import { bs } from "./bs.mjs";
@@ -116,8 +116,11 @@ async function main() {
       while (k >= 0 && iso(rows[k].ts) > d) k--;
       if (k < 260 || iso(rows[k].ts) !== d) continue;
       const a = await analyze(s, { daily: rows.slice(0, k + 1), spyRet60 }).catch(() => null);
-      if (a && passes(a) && a.dollarVol >= 150e6 && a.price >= 15) sig.push({ ...a, q: quality(a), d, k });
+      if (a) sig.push({ ...a, d, k });
     }
+    rankAndClassify(sig);                                            // o günün kesitsel momentum sırası → seçim
+    for (let i = sig.length - 1; i >= 0; i--) if (!(sig[i].passed && sig[i].dollarVol >= 150e6 && sig[i].price >= 15)) sig.splice(i, 1);
+    sig.forEach(a => { a.q = quality(a); });
     sig.sort((a, b) => b.q - a.q);
     picks.push(...sig.filter(a => a.signal === "AL").slice(0, NAL), ...sig.filter(a => a.signal === "SAT").slice(0, NSAT));
   }

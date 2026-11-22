@@ -7,8 +7,9 @@
 //        DRY_RUN=1 (Telegram'a gönderme) · FORCE=1 (piyasa kapalıyken de tara) · SYMBOLS=AAPL,MSFT (alt küme)
 //        OPT_FORCE=1 (opsiyon fikirlerini saat beklemeden üret) · IV_FORCE=1 (IV geçmişi kaydını zorla)
 //        MARK_FORCE=1 (karnedeki açık fikirleri saat beklemeden değerle)
-import { scanAll, analyze, spyReturn60, loadUniverse, dailyCache, CFG } from "../spot/scan.mjs";
-import { liveQuotes, alpacaEnabled } from "../data/alpaca.mjs";
+import { scanAll, analyze, spyReturn60, loadUniverse, dailyCache, CFG, setMomCuts } from "../spot/scan.mjs";
+import { logSignals, score, fmtSpotReport } from "./spotbook.mjs";
+import { liveQuotes, alpacaEnabled, news } from "../data/alpaca.mjs";
 import { isMarketOpen, nyDate, nyParts, fmtTR } from "../data/market.mjs";
 import { riskFreeRate, fetchDaily, optionChain } from "../data/yahoo.mjs";
 import { loadFiles, saveFiles, READ_FAILED, gistEnabled, STATE_FILE, IVHIST_FILE } from "./state.mjs";
@@ -44,7 +45,11 @@ export function pickFresh(signals, sent, cap = DAY_CAP) {
 // ---------- Mesaj biçimleri ----------
 export function fmtSignal(a) {
   const icon = a.signal === "AL" ? "🟢" : "🔴";
-  const parts = [`${icon} ${a.sym} ${usd(a.price)}`, `güven %${a.confidence}`, `ADX ${a.adx}`];
+  const parts = [`${icon} ${a.sym} ${usd(a.price)}`];
+  if (a.signal === "AL" && a.mom12 != null) {
+    parts.push(`mom12 ${sgn(+(a.mom12 * 100).toFixed(0))}%`);
+    if (a.hi52 != null) parts.push(`zirveye −${((1 - a.hi52) * 100).toFixed(0)}%`);
+  } else parts.push(`güven %${a.confidence}`, `ADX ${a.adx}`);
   if (a.rsi != null) parts.push(`RSI ${a.rsi}`);
   parts.push(`RS60 ${sgn(a.rs60)}`);
   if (a.stopLoss) parts.push(`stop ${usd(a.stopLoss)}`);
@@ -54,7 +59,7 @@ export function fmtSignal(a) {
   return parts.join(" · ");
 }
 
-const SIG_KEYS = ["sym", "signal", "price", "confidence", "adx", "rsi", "rs60", "stopLoss", "target1", "rr", "dip"];
+const SIG_KEYS = ["sym", "signal", "price", "confidence", "adx", "rsi", "rs60", "stopLoss", "target1", "rr", "dip", "mom12", "hi52"];
 export const compactSignal = a => Object.fromEntries(SIG_KEYS.map(k => [k, a[k]]));
 
 // /sinyaller: filtreyi geçen TÜM sinyaller, AL ve SAT ayrı başlıklarla (kalite sırasıyla). Kesme yok.
@@ -67,11 +72,13 @@ export function fmtSignalList(ls) {
   return L.join("\n");
 }
 
-export function fmtDetail(a) {
+export function fmtDetail(a, newsList = []) {
   if (!a) return "Veri alınamadı (sembol hatalı olabilir).";
   const L = [
     `🔎 ${a.sym} — ${usd(a.price)}${a.live ? " (canlı · IEX)" : " (Yahoo)"}`,
-    `Sinyal: ${a.signal} · güven %${a.confidence}${a.mod ? " · " + a.mod : ""}`,
+    `Seçim: ${a.pick ? (a.pick === "AL" ? "🟢 AL (momentum lideri geri çekilmede)" : "🔴 SAT (teyitli düşüş + zayıf momentum)") : "— (kurallara uymuyor)"}`,
+    `Momentum 12a ${a.mom12 != null ? sgn(+(a.mom12 * 100).toFixed(1)) + "%" : "—"}${a.momRank != null ? ` (evren sırası ~%${Math.round(a.momRank * 100)})` : ""} · 52h zirveye ${a.hi52 != null ? "−" + ((1 - a.hi52) * 100).toFixed(1) + "%" : "—"} · 200g ort. ${a.a200 != null ? sgn(+(a.a200 * 100).toFixed(1)) + "%" : "—"}`,
+    `Teknik motor: ${a.engSignal ?? a.signal} · güven %${a.confidence}${a.mod ? " · " + a.mod : ""}`,
     `Trend (haftalık): ${a.htf || "?"}${a.htfNote ? " · " + a.htfNote : ""}`,
     `ADX ${a.adx} · RSI ${a.rsi ?? "—"} · ATR ${a.atr ?? "—"}`,
     `60g getiri ${sgn(a.ret60)}% · SPY'a göre ${sgn(a.rs60)}%`,
@@ -80,6 +87,10 @@ export function fmtDetail(a) {
   if (a.stopLoss || a.target1) L.push(`Stop ${usd(a.stopLoss)} · Hedef1 ${usd(a.target1)} · Hedef2 ${usd(a.target2)} · R:R ${a.rr || "—"}`);
   if (a.entryHint) L.push(`Giriş: ${a.entryHint}`);
   if (Array.isArray(a.waitReasons) && a.waitReasons.length) L.push(`Bekleme nedenleri: ${a.waitReasons.slice(0, 3).join(" · ")}`);
+  if (newsList.length) {
+    L.push("", "📰 Son haberler:");
+    for (const n of newsList) L.push(`• ${n.t ? n.t.slice(5, 10).split("-").reverse().join(".") + " " : ""}${n.headline}${n.source ? ` (${n.source})` : ""}`);
+  }
   L.push("", "Opsiyon yapıları için: /opsiyon " + a.sym, DISCLAIMER);
   return L.join("\n");
 }
@@ -90,9 +101,31 @@ const HELP = [
   "/opsiyon SEMBOL — oynaklık panosu + en iyi 3 opsiyon yapısı (örn. /opsiyon AAPL)",
   "/sinyaller — son taramanın AL/SAT listesi",
   "/karne — gönderilen opsiyon fikirlerinin gerçekleşen sonuçları (model isabeti)",
+  "/spotkarne — gönderilen spot sinyallerinin son 30 gündeki sonucu (SPY'a göre)",
   "/durum — bot durumu",
   "/yardim — bu liste",
 ].join("\n");
+
+// ---------- Spot karnesi ve haftalık rapor ----------
+const daysAgo = (d, n) => new Date(Date.parse(d + "T12:00:00Z") - n * 864e5).toISOString().slice(0, 10);
+function spotScored(st) {
+  const p = st.lastPx?.p || {};
+  return score(st.spotBook || [], s => p[s], st.lastPx?.spy);
+}
+export function weeklyReport(st, today) {
+  const sc = spotScored(st);
+  const open = (st.optBook || []).filter(b => !b.closed);
+  const L = [`📅 HAFTALIK RAPOR — ${today}`, "",
+    fmtSpotReport(sc, daysAgo(today, 7), "📈 Bu haftanın spot sinyalleri"), "",
+    fmtSpotReport(sc, daysAgo(today, 30), "📈 Son 30 gün"), "",
+    fmtStats(stats(st.optBook || []))];
+  if (open.length) {
+    L.push("", "Açık opsiyon fikirleri:");
+    for (const b of open) L.push(`• ${b.sym} ${b.code} ${b.legs.map(l => l.K + l.type).join("/")} (${b.exp}) · ${b.mark ? `güncel K/Z ${b.mark.pnl >= 0 ? "+" : ""}$${b.mark.pnl}` : "henüz değerlenmedi"}`);
+  }
+  L.push("", "ℹ Spot getirileri sinyal yönünde (SAT için düşüş = +). SPY'a göre = sinyalin piyasaya katkısı. " + DISCLAIMER);
+  return L.join("\n");
+}
 
 // ---------- Opsiyon: tek sembol ----------
 async function optionsFor(sym, ivStore, r, spyRet60) {
@@ -114,7 +147,8 @@ async function handleCommands(st, ivStore, ctx) {
       if (!sym) { await sendTG("Kullanım: /hisse SEMBOL (örn. /hisse AAPL)"); continue; }
       const live = (await liveQuotes([sym]))[sym] || null;
       const spy = await ctx.spy();
-      await sendTG(fmtDetail(await analyze(sym, { live, spyRet60: spy.ret60 }).catch(() => null)));
+      const [a, nw] = await Promise.all([analyze(sym, { live, spyRet60: spy.ret60 }).catch(() => null), news(sym, 5).catch(() => [])]);
+      await sendTG(fmtDetail(a, nw));
     } else if (cmd === "/opsiyon") {
       if (!sym) { await sendTG("Kullanım: /opsiyon SEMBOL (örn. /opsiyon NVDA)"); continue; }
       await sendTG(`⏳ ${sym} opsiyon zinciri analiz ediliyor…`);
@@ -122,6 +156,10 @@ async function handleCommands(st, ivStore, ctx) {
       await sendTG(fmtAnalysis(res));
     } else if (cmd === "/karne") {
       await sendTG(fmtStats(stats(st.optBook || [])));
+    } else if (cmd === "/spotkarne") {
+      const today = nyDate();
+      await sendTG(fmtSpotReport(spotScored(st), daysAgo(today, 30), "📈 SPOT SİNYAL KARNESİ — son 30 gün") +
+        `\n(fiyatlar: son tarama ${st.lastPx?.at || "—"})`);
     } else if (cmd === "/sinyaller") {
       const ls = st.lastScan;
       if (!ls) await sendTG("Henüz tarama yok.");
@@ -199,6 +237,7 @@ export async function main() {
   }
   const st = files[STATE_FILE], ivStore = files[IVHIST_FILE];
   if (!gistEnabled()) console.log("ℹ Gist yapılandırılmamış — durum kalıcı değil (yerel test).");
+  setMomCuts(st.momCuts);   // son tam taramanın momentum eşikleri (tek sembol analizi + çekirdek tarama için)
   let ivDirty = false;
 
   // Tembel bağlam: komutlar gerektiğinde bir kez hesaplanır
@@ -217,8 +256,10 @@ export async function main() {
   const today = nyDate(), { mins } = nyParts();
   const { syms: scanSyms, full } = pickScanSet(st);
   const [liveMap, spy] = await Promise.all([liveQuotes(scanSyms), ctx.spy()]);
-  const { signals, analyzed, all } = await scanAll(scanSyms, { liveMap, spyRet60: spy.ret60 });
+  const { signals, analyzed, all, cuts } = await scanAll(scanSyms, { liveMap, spyRet60: spy.ret60 });
   if (full) st.lastFullScanTs = Date.now();
+  if (cuts) st.momCuts = cuts;
+  const spyPx = liveMap.SPY?.price ?? spy.rows?.at(-1)?.close ?? null;
   console.log(`Tarama (${full ? "TAM" : "çekirdek"}): ${analyzed}/${scanSyms.length} analiz · ${signals.length} sinyal · canlı fiyat ${Object.keys(liveMap).length} · ${((Date.now() - t0) / 1e3).toFixed(0)}s`);
 
   // --- Spot sinyalleri: aynı gün aynı sinyali tekrar gönderme ---
@@ -228,7 +269,8 @@ export async function main() {
   const firstOfDay = st.lastHeaderDay !== today;
   if (fresh.length || firstOfDay) {
     const al = fresh.filter(s => s.signal === "AL"), sat = fresh.filter(s => s.signal === "SAT");
-    let m = `🇺🇸 ABD SPOT SİNYALLERİ${firstOfDay ? " — seans açılışı" : " — yeni"}\n${fmtTR()} (TR) · SPY 60g ${sgn(spy.ret60)}%\n`;
+    let m = `🇺🇸 ABD SPOT SİNYALLERİ${firstOfDay ? " — seans açılışı" : " — yeni"}\n${fmtTR()} (TR) · SPY 60g ${sgn(spy.ret60)}%\n` +
+      (firstOfDay ? "AL = momentum lideri geri çekilmede (ufuk ~1 ay) · SAT = teyitli düşüş + zayıf momentum\n" : "");
     // Kesme YOK: liste zaten günlük kotayla sınırlı; uzun mesaj sendTG'de satır sınırından parçalanır.
     if (al.length) m += `\nAL (${al.length})\n` + al.map(fmtSignal).join("\n") + "\n";
     if (sat.length) m += `\nSAT (${sat.length})\n` + sat.map(fmtSignal).join("\n") + "\n";
@@ -236,8 +278,10 @@ export async function main() {
     if (analyzed === 0) m += "\n⚠ Hiçbir sembol analiz edilemedi — veri kaynağı sorunu olabilir.\n";
     if (held) m += `\n(+${held} sinyal daha filtreyi geçti; günlük kota AL ${DAY_CAP.AL} / SAT ${DAY_CAP.SAT} — liste: /sinyaller)\n`;
     m += `\n${analyzed}/${SYMS.length} hisse tarandı · SAT = spotta çık/girme · ${DISCLAIMER}`;
-    if (await sendTG(m)) st.lastHeaderDay = today;
-    else {
+    if (await sendTG(m)) {
+      st.lastHeaderDay = today;
+      logSignals((st.spotBook ||= []), fresh, today, spyPx);           // canlı spot karnesi
+    } else {
       // Gönderilemeyen sinyaller "gönderildi" sayılmaz → sonraki run'da tekrar denenir (kaybolmaz).
       for (const s of fresh) { delete st.sent.map[s.sym]; st.sent.n[s.signal]--; }
       console.error(`⚠ Spot mesajı gönderilemedi — ${fresh.length} sinyal sonraki run'da tekrar denenecek.`);
@@ -285,6 +329,19 @@ export async function main() {
     console.log(`Karne değerleme: ${marked} açık fikir · ${closed.length} kural tetiklendi`);
     if (closed.length) await sendTG("📕 OPSİYON FİKRİ KAPAT — yönetim kuralı tetiklendi\n\n" + closed.map(fmtClosed).join("\n") +
       "\n\nℹ Fiyat: bugünkü canlı alış/satış (orta ± %30 spread). Kendi pozisyonunu canlı fiyatla kontrol et.\n\n" + fmtStats(stats(st.optBook)));
+  }
+
+  // --- Spot karnesi için güncel fiyatlar (yalnız kayıtlı sinyallerin hisseleri) ---
+  if (st.spotBook?.length) {
+    const px = new Map(all.map(a => [a.sym, a.price]));
+    st.lastPx = { at: today, spy: spyPx, p: Object.fromEntries([...new Set(st.spotBook.map(b => b.sym))].map(s => [s, px.get(s) ?? st.lastPx?.p?.[s] ?? null])) };
+  }
+
+  // --- HAFTALIK RAPOR: Cuma 15:30 NY sonrası (TR 23:30), haftada 1 ---
+  const { wd } = nyParts();
+  if ((wd === "Fri" && mins >= 930 && st.lastWeekly !== today) || process.env.WEEKLY_FORCE === "1") {
+    st.lastWeekly = today;
+    await sendTG(weeklyReport(st, today));
   }
 
   // --- IV geçmişi: günde 1 (15:00 NY sonrası) → IV rank zamanla oluşur ---

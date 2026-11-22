@@ -5,35 +5,53 @@
 // 4) Yön × rejim matrisi → izin verilen stratejiler
 // 5) Her aday: gerçekçi dolum, maks kâr/zarar, başabaş, piyasa POP'u, BİZİM POP'umuz ve beklenen değer
 //    (kalın kuyruklu dağılım + gerçekleşen oynaklık + küçük sinyal eğimi), CVaR %5, Greek'ler
-// 6) Eleme: EV ≤ 0, avantaj < MIN_EDGE, likidite, kâr olasılığı tabanı → sıralama → en iyi fikirler (çeşitli)
+// 6) YÖNETİLEN İŞLEM simülasyonu (mesajdaki kurallarla gün gün) → yönetilen EV, kazanma oranı, süre, Kelly
+// 7) Eleme: yönetilen EV < MIN_EDGE·maks zarar veya Kelly = 0 → elenir. Sıra: Kelly büyüme hızı. Boyut: ¼ Kelly (≤ %2)
 import { loadChain } from "./chain.mjs";
 import { volDashboard, atmIV } from "./vol.mjs";
 import { candidates, STRAT } from "./strategies.mjs";
 import { terminalDist, evaluate, skewK } from "./dist.mjs";
+import { simulateManaged, kelly } from "./sim.mjs";
+import { unusualOptions } from "./flow.mjs";
 
 export const OCFG = {
   MIN_EDGE: +(process.env.OPT_MIN_EDGE || 0.03),     // EV / maks zarar ≥ %3
   ACCOUNT: +(process.env.OPT_ACCOUNT || 10000),      // boyutlandırma için hesap büyüklüğü ($)
   RISK: +(process.env.OPT_RISK || 0.02),             // işlem başına hesabın en çok %2'si riske
-  // En güçlü sinyalde bile en fazla 0.15σ yön eğimi. Spot sinyalinin ABD isabeti backtest'le doğrulanınca artırılabilir.
+  // KALİBRE YÖN: research/ ölçümü — seçilen hisselerin 21 günde evrene göre fazla getirisi
+  //   AL (momentum lideri geri çekilmede, günde ilk 10): ort. +%2.1 / +%3.7, %5 kırpılmış ort. +%1.45/ay
+  //     → kırpılmışın YARISI ≈ +%0.75/ay ≈ yıllık +0.09
+  //   SAT (teyitli düşüş + zayıf momentum): ~−%1.2/ay → YARISI −%0.6/ay ≈ yıllık −0.07
+  // Yarıya indirme: hayatta kalan yanlılığı + aşırı uyum + rejim değişimi payı. Kayma = r − q + bu fazla getiri.
+  EDGE_AL: +(process.env.OPT_EDGE_AL || 0.09),
+  EDGE_SAT: +(process.env.OPT_EDGE_SAT || 0.07),
+  // Eski (kalibresiz) eğim: yalnız filtre bilgisi olmayan çağrılarda (testler) — score·TILT·σ/√T
   TILT: +(process.env.OPT_TILT || 0.15),
   // Vade yapısı (yakın IV / IV30). > INV → ters: oynaklık avantajı iddia edilmez (σ ≥ IV).
   // > INV_HARD → belirgin stres: iron condor (yönsüz prim satışı) yasak — büyük hareketler tam bu dönemlerde gelir.
   INV: +(process.env.OPT_INV || 1.1),
   INV_HARD: +(process.env.OPT_INV_HARD || 1.25),
-  // Yön tahmininin EV katkısına güven payı. Spot sinyalinin ABD isabeti /karne ve backtest'le doğrulanana dek
-  // yön kaynaklı EV yarı ağırlıkla sayılır → avantajı YALNIZCA yön tahminine dayanan fikir zor geçer.
-  DIR_TRUST: +(process.env.OPT_DIR_TRUST || 0.5),
+  // Yön kaynaklı EV'ye ek güven çarpanı. Kalibre kayma zaten ölçülenin YARISI olduğundan varsayılan 1.
+  // Canlı /spotkarne ölçülenden kötü çıkarsa düşürülür.
+  DIR_TRUST: +(process.env.OPT_DIR_TRUST || 1),
   // KULLANICI KURALI: yalnızca opsiyon ALIMI (long call / long put). Hiçbir bacağı satış olan yapı önerilmez —
   // kredili spread, iron condor ve borçlu spread'ler (ikinci bacağı satış) dahil. OPT_LONG_ONLY=0 ile eski matris.
   LONG_ONLY: process.env.OPT_LONG_ONLY !== "0",
+  SIM_TOP: +(process.env.OPT_SIM_TOP || 15),         // dayanak başına simüle edilen en iyi aday sayısı
+  SIM_N: +(process.env.OPT_SIM_N || 2000),           // senaryo sayısı
+  KELLY_FRAC: +(process.env.OPT_KELLY_FRAC || 0.25), // ¼ Kelly (tahmin hatasına karşı)
 };
 
-// Spot analizinden yön puanı. Güven 50 → 0, 100 → ±1.
+// Spot analizinden yön. Seçim kuralını geçen hisse → kalibre fazla getiri (edge, yıllık). Geçmeyen → nötr.
 export function directionOf(a) {
+  if (a?.pick) {
+    const up = a.pick === "AL";
+    return { dir: up ? 1 : -1, score: up ? 1 : -1, edge: up ? OCFG.EDGE_AL : -OCFG.EDGE_SAT,
+      label: up ? `YUKARI (momentum lideri geri çekilmede · mom12 ${a.mom12 != null ? "+" + Math.round(a.mom12 * 100) + "%" : "?"})` : `AŞAĞI (teyitli düşüş · güven %${a.confidence})` };
+  }
   if (!a || a.signal === "NÖTR") return { dir: 0, score: 0, label: "NÖTR" };
-  // Spot kalite filtresini geçmeyen sinyal (zayıf trend, SPY'a göre ters göreli güç vb.) yön sayılmaz.
-  if (a.passed === false) return { dir: 0, score: 0, label: `NÖTR (${a.signal} %${a.confidence} filtreden geçmedi)` };
+  // Seçim kuralını geçmeyen sinyal yön sayılmaz.
+  if (a.passed === false) return { dir: 0, score: 0, label: `NÖTR (motor ${a.engSignal ?? a.signal} %${a.confidence} · seçim kuralına uymuyor)` };
   const s = Math.max(0, Math.min(1, ((a.confidence || 50) - 50) / 50));
   if (s < 0.2) return { dir: 0, score: 0, label: "NÖTR (zayıf sinyal)" };
   return a.signal === "AL" ? { dir: 1, score: s, label: `YUKARI (AL %${a.confidence})` } : { dir: -1, score: -s, label: `AŞAĞI (SAT %${a.confidence})` };
@@ -53,7 +71,8 @@ export function allowedFor(dir, regime, ivhv, termRatio = null, longOnly = OCFG.
 
 // Ana analiz. spot: spot/scan.mjs analyze() çıktısı; daily: günlük mumlar; hist: IV30 geçmişi.
 export async function analyzeOptions(sym, { spot, daily, r, hist = null, top = 3 }) {
-  const chain = await loadChain(sym, r);
+  // Alımda vade penceresi 35–120 gün (hedef ~60): zaman erimesinin yavaş olduğu bölge
+  const chain = await loadChain(sym, r, OCFG.LONG_ONLY ? { minDte: 35, maxDte: 120, targets: [42, 63, 95] } : {});
   if (!chain || !chain.expiries.length) return { sym, error: "Opsiyon zinciri alınamadı (opsiyonu olmayan/illikit hisse olabilir)." };
   const vol = volDashboard(chain, daily, hist);
   const d = directionOf(spot);
@@ -62,7 +81,7 @@ export async function analyzeOptions(sym, { spot, daily, r, hist = null, top = 3
   const reasons = [`Yön: ${d.label}`, `Oynaklık: ${vol.regime}${vol.rank != null ? ` (IV rank ${vol.rank})` : vol.ivhv ? ` (IV/HV ${vol.ivhv.toFixed(2)})` : ""}`];
   if (vol.termRatio && vol.termRatio > OCFG.INV) reasons.push(`Vade yapısı TERS (${vol.termRatio.toFixed(2)}) — yakın vadede olay/stres fiyatlanıyor${stress && !OCFG.LONG_ONLY ? "; yönsüz prim satışı (iron condor) yasak" : ""}`);
   if (Math.abs(chain.parityGap) >= 0.002) reasons.push(`Dayanak fiyatı zincirden (parite) alındı: $${chain.S.toFixed(2)} (kotasyon $${chain.Squote.toFixed(2)}, fark ${(chain.parityGap * 100).toFixed(2)}%)`);
-  const base = { sym, S: chain.S, vol, dir: d, reasons, allowed: [...allowed] };
+  const base = { sym, S: chain.S, vol, dir: d, reasons, allowed: [...allowed], unusual: unusualOptions(chain) };
   if (chain.S < 10) return { ...base, ideas: [], note: "Fiyat < $10 — opsiyon spread'leri genelde verimsiz." };
   if (!allowed.size) return { ...base, ideas: [], note: d.dir === 0
     ? (OCFG.LONG_ONLY ? "Yön yok → opsiyon ALIMI için gerekçe yok (BEKLE). (Yalnız alım modu: satış içeren yapı önerilmez.)"
@@ -72,9 +91,9 @@ export async function analyzeOptions(sym, { spot, daily, r, hist = null, top = 3
     : "Uygun yapı yok." };
 
   const now = Date.now();
-  const ideas = [];
+  const ideas = [], pre = [];
   for (const ex of chain.expiries) {
-    if (ex.dte < 14 || ex.dte > 75) continue;                           // işlem penceresi
+    if (ex.dte < 14 || ex.dte > (OCFG.LONG_ONLY ? 130 : 75)) continue;   // işlem penceresi (alımda daha uzun vade)
     const expMs = ex.exp * 1e3 + 20 * 3600e3;
     const earnInside = chain.earningsTs && chain.earningsTs * 1e3 > now && chain.earningsTs * 1e3 < expMs;
     let allow = new Set(allowed);
@@ -95,7 +114,8 @@ export async function analyzeOptions(sym, { spot, daily, r, hist = null, top = 3
     // Kayma: taban = piyasanın ileri fiyatı (r − q) → yönsüz senaryoda ne boğa ne ayı yapılarına sistematik avantaj.
     // Üstüne sinyal eğimi: toplam = score·TILT·σ√T.
     const mu0 = chain.r - chain.q;
-    const mu = mu0 + d.score * OCFG.TILT * sigP / Math.sqrt(ex.T);
+    // Kalibre yön varsa: yıllık fazla getiri (ölçülenin yarısı). Yoksa (eski çağrı): sinyal eğimi.
+    const mu = mu0 + (d.edge != null ? d.edge : d.score * OCFG.TILT * sigP / Math.sqrt(ex.T));
     // Çarpıklık: piyasa dağılımı skew'un TAMAMINI, bizim dağılımımız %70'ini taşır
     // (put skew'unun bir kısmı tarihsel olarak risk primidir; tamamını yok saymak kuyruk riskini gizler).
     const kMkt = skewK(vol.skew, vol.iv30 || ivEx, 1), kPhys = skewK(vol.skew, vol.iv30 || ivEx, 0.7);
@@ -105,20 +125,36 @@ export async function analyzeOptions(sym, { spot, daily, r, hist = null, top = 3
 
     for (const c of candidates(ex, chain.S, allow)) {
       if (!isFinite(c.maxLoss) || c.maxLoss <= 0) continue;
+      // Vade-sonu değerlendirmesi: ucuz ön eleme + model kalibrasyonu için (karne "vadeye kadar tutulmuş" kısmı)
       const e = evaluate(c.L, c.debit, phys);
-      if (e.ev <= 0 || e.ev / c.maxLoss < OCFG.MIN_EDGE) continue;
-      if (e.pop < (c.kind === "credit" ? 0.55 : 0.3)) continue;
+      if (e.pop < (c.kind === "credit" ? 0.55 : 0.2)) continue;
       const evVol = flat === phys ? e.ev : evaluate(c.L, c.debit, flat).ev;   // oynaklık (+ maliyet) kaynaklı kısım
       const evAdj = evVol + OCFG.DIR_TRUST * (e.ev - evVol);                  // yön payı güven oranıyla
-      const edge = evAdj / c.maxLoss;
-      if (evAdj <= 0 || edge < OCFG.MIN_EDGE) continue;
       const m = evaluate(c.L, c.debit, mkt);
-      const score = edge - 0.3 * c.spreadAvg + 0.05 * (e.pop - 0.5) - 0.0015 * Math.abs(ex.dte - 38) + (c.oiMin >= 1000 ? 0.01 : 0);
-      ideas.push({ ...c, exp: ex.exp, dte: ex.dte, expDate: new Date(ex.exp * 1e3).toISOString().slice(0, 10), ivEx, sigP, earnInside, ev: e.ev, evVol, evDir: e.ev - evVol, evAdj, pop: e.pop, cvar5: e.cvar5, popMkt: m.pop, edge: e.ev / c.maxLoss, edgeAdj: edge, score });
+      pre.push({ ...c, exp: ex.exp, dte: ex.dte, T: ex.T, expDate: new Date(ex.exp * 1e3).toISOString().slice(0, 10), ivEx, sigP, mu, mu0, earnInside,
+        ev: e.ev, evVol, evDir: e.ev - evVol, evAdj, pop: e.pop, cvar5: e.cvar5, popMkt: m.pop, edge: e.ev / c.maxLoss, edgeAdj: evAdj / c.maxLoss });
     }
   }
   // İkinci emniyet: yalnız-alım modunda satış bacağı içeren hiçbir yapı listeye giremez.
-  if (OCFG.LONG_ONLY) for (let k = ideas.length - 1; k >= 0; k--) if (ideas[k].legs.some(l => l.side < 0)) ideas.splice(k, 1);
+  if (OCFG.LONG_ONLY) for (let k = pre.length - 1; k >= 0; k--) if (pre[k].legs.some(l => l.side < 0)) pre.splice(k, 1);
+
+  // YÖNETİLEN İŞLEM: vade-sonu avantajı en iyi SIM_TOP aday, mesajdaki kurallarla gün gün simüle edilir.
+  // Eleme ve sıralama BUNA göre: yönetilen EV (yön payı güven oranıyla) ≥ %MIN_EDGE·maks zarar, Kelly > 0;
+  // sıra = Kelly büyüme hızı (gün başına) — sermayeyi en hızlı büyüten işlem önce.
+  pre.sort((a, b) => b.edgeAdj - a.edgeAdj);
+  for (const c of pre.slice(0, OCFG.SIM_TOP)) {
+    const legs = c.legs.map(l => ({ type: l.type, K: l.K, side: l.side, iv: l.iv, sp: l.mid ? (l.ask - l.bid) / l.mid : 0 }));
+    const rules = rulesFor(c);
+    const muSim = c.mu0 + OCFG.DIR_TRUST * (c.mu - c.mu0);
+    const base = { S0: chain.S, T: c.T, sigma: c.sigP, r: chain.r, q: chain.q, legs, debit: c.debit, rules, n: OCFG.SIM_N };
+    const sm = simulateManaged({ ...base, mu: muSim });
+    const sv = d.score ? simulateManaged({ ...base, mu: c.mu0 }) : sm;
+    const k = kelly(sm.pnls, c.maxLoss);
+    const edgeM = sm.ev / c.maxLoss;
+    if (sm.ev <= 0 || edgeM < OCFG.MIN_EDGE || k.f <= 0) continue;
+    ideas.push({ ...c, rules, evM: sm.ev, evMVol: sv.ev, evMDir: sm.ev - sv.ev, popM: sm.pop, cvarM: sm.cvar5, daysM: sm.days,
+      exitsM: sm.reasons, edgeM, kellyF: k.f, growth: k.g, score: k.g / Math.max(1, sm.days) - 0.1 * c.spreadAvg / Math.max(1, sm.days) });
+  }
   ideas.sort((a, b) => b.score - a.score);
   // Çeşitlilik: önce farklı stratejiler, sonra aynı stratejinin farklı vadeleri, en son kalanlar
   const picked = [], key = (i, k) => k === 0 ? i.code : `${i.code}|${i.exp ?? i.ex?.exp}`;
@@ -131,12 +167,15 @@ export async function analyzeOptions(sym, { spot, daily, r, hist = null, top = 3
     }
   }
   picked.forEach(i => {
-    i.contracts = Math.floor(OCFG.ACCOUNT * OCFG.RISK / i.maxLoss);
-    i.minAccount = Math.ceil(i.maxLoss / OCFG.RISK / 1000) * 1000;   // %2 kuralıyla 1 kontrat için gereken hesap
-    i.rules = rulesFor(i);
+    // Boyut: ¼ Kelly, üst sınır %RISK. Kelly küçükse risk de küçük — avantaj zayıfsa az pozisyon.
+    i.riskFrac = Math.min(OCFG.RISK, OCFG.KELLY_FRAC * (i.kellyF ?? 0)) || OCFG.RISK;
+    i.contracts = Math.floor(OCFG.ACCOUNT * i.riskFrac / i.maxLoss);
+    i.minAccount = Math.ceil(i.maxLoss / i.riskFrac / 1000) * 1000;   // 1 kontrat için gereken hesap
+    i.rules = i.rules || rulesFor(i);
     i.manage = manageRules(i);
   });
-  return { ...base, ideas: picked, considered: ideas.length, note: picked.length ? null : "Filtreleri geçen pozitif beklentili yapı bulunamadı (BEKLE)." };
+  return { ...base, ideas: picked, considered: pre.length, simulated: Math.min(pre.length, OCFG.SIM_TOP),
+    note: picked.length ? null : `Yönetilen işlem simülasyonunda pozitif beklentili yapı yok (${Math.min(pre.length, OCFG.SIM_TOP)} aday simüle edildi) → BEKLE.` };
 }
 
 // Yönetim kuralları VERİ olarak tanımlıdır: mesajdaki metin ve karnedeki günlük simülasyon aynı kaynaktan gelir.
