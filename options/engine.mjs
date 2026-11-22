@@ -37,6 +37,16 @@ export const OCFG = {
   // KULLANICI KURALI: yalnızca opsiyon ALIMI (long call / long put). Hiçbir bacağı satış olan yapı önerilmez —
   // kredili spread, iron condor ve borçlu spread'ler (ikinci bacağı satış) dahil. OPT_LONG_ONLY=0 ile eski matris.
   LONG_ONLY: process.env.OPT_LONG_ONLY !== "0",
+  // PUT ALIMI KAPALI (varsayılan): opsiyon geriye dönük testi (Mar 2024–Eki 2026, 120 put) — SAT seçimlerine put
+  // almak %0 maliyette bile −%10, %3 maliyette −%16 prim getirisi (PF 0.59). Aynı hisselere call bile kazandırırdı.
+  // Spot SAT sinyalleri (çık/girme uyarısı) sürer; yalnız put ÖNERİSİ verilmez. OPT_PUTS=1 ile açılır.
+  PUTS: process.env.OPT_PUTS === "1",
+  // Long opsiyon çıkış kuralı (opsiyon geriye dönük testindeki varyant karşılaştırmasıyla seçilir).
+  // LONG_TP: prim getirisi (1 = +%100; "none" = kâr hedefi yok) · LONG_SL: prim kaybı (0.5 = −%50; "none" = stop yok)
+  // LONG_DTE: vadeye bu kadar gün kala kapat
+  LONG_TP: process.env.OPT_LONG_TP === "none" ? null : +(process.env.OPT_LONG_TP || 1),
+  LONG_SL: process.env.OPT_LONG_SL === "none" ? null : +(process.env.OPT_LONG_SL || 0.5),
+  LONG_DTE: +(process.env.OPT_LONG_DTE || 21),
   SIM_TOP: +(process.env.OPT_SIM_TOP || 15),         // dayanak başına simüle edilen en iyi aday sayısı
   SIM_N: +(process.env.OPT_SIM_N || 2000),           // senaryo sayısı
   KELLY_FRAC: +(process.env.OPT_KELLY_FRAC || 0.25), // ¼ Kelly (tahmin hatasına karşı)
@@ -61,7 +71,7 @@ export function directionOf(a) {
 // Yalnız-alım modunda: yukarı → long call, aşağı → long put, yön yok → hiçbir şey. Pahalı oynaklıkta alım
 // yasak değildir ama oynaklık maliyeti EV'yi düşürür; eleme bunu kendisi yapar.
 export function allowedFor(dir, regime, ivhv, termRatio = null, longOnly = OCFG.LONG_ONLY) {
-  if (longOnly) return new Set(dir > 0 ? ["LONG_CALL"] : dir < 0 ? ["LONG_PUT"] : []);
+  if (longOnly) return new Set(dir > 0 ? ["LONG_CALL"] : dir < 0 && OCFG.PUTS ? ["LONG_PUT"] : []);
   if (dir > 0) return new Set(regime === "ucuz" ? ["LONG_CALL", "BULL_CALL"] : regime === "zengin" ? ["BULL_PUT", "BULL_CALL"] : ["BULL_CALL", "BULL_PUT"]);
   if (dir < 0) return new Set(regime === "ucuz" ? ["LONG_PUT", "BEAR_PUT"] : regime === "zengin" ? ["BEAR_CALL", "BEAR_PUT"] : ["BEAR_PUT", "BEAR_CALL"]);
   if (termRatio && termRatio > OCFG.INV_HARD) return new Set();
@@ -88,7 +98,7 @@ export async function analyzeOptions(sym, { spot, daily, r, hist = null, top = 3
       : stress && (vol.regime === "zengin" || (vol.ivhv ?? 0) >= 1.1)
       ? "Oynaklık pahalı ama vade yapısı belirgin ters (stres) → yönsüz prim satışı yapılmaz (BEKLE)."
       : "Yön yok ve oynaklık pahalı değil → avantajlı opsiyon yapısı yok (BEKLE).")
-    : "Uygun yapı yok." };
+    : d.dir < 0 && OCFG.LONG_ONLY && !OCFG.PUTS ? "SAT seçimi — ama put ALIMI geriye dönük testte her maliyet senaryosunda zarar ettirdi → put önerilmez (OPT_PUTS=1 ile açılır). Spotta: çık / girme." : "Uygun yapı yok." };
 
   const now = Date.now();
   const ideas = [], pre = [];
@@ -194,7 +204,9 @@ export function rulesFor(i) {
     const stop = 2 * prem;
     return { tp: Math.round(0.5 * i.maxProfit), sl: stop < i.maxLoss * 0.9 ? -Math.round(stop) : null, dte: 21, breakShort: true };
   }
-  if (i.code === "LONG_CALL" || i.code === "LONG_PUT") return { tp: Math.round(prem), sl: -Math.round(0.5 * prem), dte: 21, breakShort: false };
+  if (i.code === "LONG_CALL" || i.code === "LONG_PUT") return {
+    tp: OCFG.LONG_TP != null ? Math.round(OCFG.LONG_TP * prem) : null,
+    sl: OCFG.LONG_SL != null ? -Math.round(OCFG.LONG_SL * prem) : null, dte: OCFG.LONG_DTE, breakShort: false };
   return { tp: Math.round(0.75 * i.maxProfit), sl: -Math.round(0.5 * prem), dte: 10, breakShort: false };
 }
 
@@ -208,7 +220,14 @@ function manageText(i, r) {
     const stopTxt = r.sl != null ? `zarar $${-r.sl}'a (2× kredi) ulaşırsa ya da kısa strike kırılırsa çık` : "kısa strike kırılırsa çık (maks zarar zaten sınırlı)";
     return `Maks kârın %50'sinde (+$${r.tp}) kapat · vadeye ${r.dte} gün kalınca kapat · ${stopTxt}`;
   }
-  if (i.code === "LONG_CALL" || i.code === "LONG_PUT") return `+%100'de (+$${r.tp}) kapat · prim %50 erirse (−$${-r.sl}) çık · vadeye ${r.dte} gün kalınca kapat (zaman erimesi hızlanır)`;
+  if (i.code === "LONG_CALL" || i.code === "LONG_PUT") {
+    const prem = Math.abs(i.debit) * 100;
+    return [
+      r.tp != null ? `+%${Math.round(r.tp / prem * 100)}'de (+$${r.tp}) kapat` : null,
+      r.sl != null ? `prim %${Math.round(-r.sl / prem * 100)} erirse (−$${-r.sl}) çık` : "zarar durdurma yok (en çok ödenen prim kaybedilir)",
+      `vadeye ${r.dte} gün kalınca kapat (zaman erimesi hızlanır)`,
+    ].filter(Boolean).join(" · ");
+  }
   return `Maks kârın %75'inde (+$${r.tp}) kapat · ödenen primin %50'si giderse (−$${-r.sl}) çık · vadeye ${r.dte} gün kalınca kapat`;
 }
 

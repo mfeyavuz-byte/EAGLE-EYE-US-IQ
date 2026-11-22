@@ -112,7 +112,7 @@ test("strateji üretici: kredili spread kuralları ve iron condor", () => {
 test("yalnız-alım modu (varsayılan): sadece long call / long put, satış bacağı asla", () => {
   for (const reg of ["ucuz", "adil", "zengin"]) {
     assert.deepEqual([...allowedFor(1, reg, 1.5, 1.4)], ["LONG_CALL"]);
-    assert.deepEqual([...allowedFor(-1, reg, 1.5, 1.4)], ["LONG_PUT"]);
+    assert.equal(allowedFor(-1, reg, 1.5, 1.4).size, 0);                       // put alımı varsayılan kapalı (backtest)
     assert.equal(allowedFor(0, reg, 1.5, 1.0).size, 0);                         // yön yok → öneri yok
   }
   // aday üretici bile izin verilmeyen yapı üretmez
