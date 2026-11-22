@@ -1,7 +1,7 @@
 name: Opsiyon geriye dönük test
 
 # Elle çalıştırılır. Alpaca anahtarları repo secret'larından gelir (yerelde anahtar gerekmez).
-# Sonuç: iş özetine (Summary) ve işlem listesi artifact olarak.
+# Sonuç: Telegram'a, iş özetine (Summary) ve işlem listesi artifact olarak.
 on:
   workflow_dispatch:
     inputs:
@@ -35,6 +35,13 @@ jobs:
         run: |
           node options/backtest.mjs | tee out.txt
           { echo '```'; sed -n '/^SONUÇ/,$p' out.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Sonucu Telegram'a gönder
+        if: always()
+        env:
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CHAT: ${{ secrets.TG_CHAT }}
+          BT_INFO: "Evren ${{ inputs.n }} hisse · her ${{ inputs.step }} işlem günü · ${{ inputs.start }} sonrası · commit ${{ github.sha }}"
+        run: node options/send-report.mjs out.txt
       - uses: actions/upload-artifact@v4
         with:
           name: opsiyon-backtest
