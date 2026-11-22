@@ -93,7 +93,7 @@ export async function fetchCommands(offset = 0) {
 function answerCallback(id) {
   fetch(`https://api.telegram.org/bot${TOKEN}/answerCallbackQuery`, {
     method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ callback_query_id: id, text: "Alındı — bot bir sonraki çalışmasında yanıtlar (~20 dk)." }),
+    body: JSON.stringify({ callback_query_id: id, text: "Alındı — bot bir sonraki çalışmasında yanıtlar (~10 dk)." }),
   }).catch(() => {});
 }
 

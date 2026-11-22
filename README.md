@@ -18,7 +18,7 @@ GitHub Actions üzerinde kendi kendine çalışır, sunucu gerekmez. Teknik moto
 | 2 | Temel analiz: SEC EDGAR (marj, büyüme, sulandırma) | ⏳ (SEC iletişim bilgisi ister) |
 
 ## Spot — ne seçer, neden
-Seans boyunca 20 dk'da bir 1.331 hisse taranır; **yeni** seçimler gönderilir (günlük kota: 10 AL + 6 SAT,
+Seans boyunca ~10 dk'da bir 1.331 hisse **canlı fiyatla** taranır; **yeni** seçimler gönderilir (günlük kota: 10 AL + 6 SAT,
 kalanlar `/sinyaller`). Ortak şart: ort. işlem hacmi ≥ 50M$.
 
 **AL = momentum lideri geri çekilmede** (ufuk ~1 ay):
@@ -103,7 +103,7 @@ Beklenti: Alımda oynaklık primini sen ödersin, orta ölçekli hisselerin opsi
 ### Komutlar
 `/hisse NVDA` (seçim + faktörler + teknik + **son haberler**) · `/opsiyon AAPL` · `/sinyaller` · `/karne` ·
 `/spotkarne` · `/takip SEMBOL` · `/birak SEMBOL` · `/takiplerim` · `/portfoy` · `/etf` · `/durum` · `/yardim`
-> Komutlar bot çalışırken okunur (seans içinde ~20 dk gecikmeyle).
+> Komutlar bot çalışırken okunur (seans içinde ~10 dk gecikmeyle).
 
 **Butonlar:** spot sinyal mesajında her hisse için 🔎 butonu (`/hisse`), `/hisse` altında "📊 Opsiyon analizi" ve
 "👁 Takip et", opsiyon fikirlerinde 📊, ETF fırsatında "⚡ SPY/QQQ durumu". Tıklama bir komut gibi işlenir.
@@ -195,6 +195,24 @@ bot/run.mjs            ana akış + komutlar + haftalık rapor     bot/spotbook.
 bot/watch.mjs          takip listesi                             bot/paper.mjs     model portföy (Alpaca paper)
 bot/state.mjs          Gist                                      bot/telegram.mjs  Telegram (parçalama, tekrar deneme)
 ```
+
+## Veri kaynakları (Investing.com kullanılmaz)
+| Veri | Kaynak | Canlılık |
+|---|---|---|
+| Hisse son fiyatı (sinyal anı) | **Alpaca IEX** | gerçek zamanlı (tek borsa) |
+| Günlük mumlar (göstergeler) | **Alpaca SIP** (anahtar yoksa Yahoo) | 15 dk gecikmeli; son mum canlı fiyatla güncellenir |
+| Opsiyon zinciri, risksiz faiz | **Yahoo** | ~15 dk gecikmeli, gerçek alış/satış |
+| Haberler | Alpaca (Benzinga) | gerçek zamanlı |
+| Geçmiş opsiyon fiyatları (test) | Alpaca (indicative) | Şubat 2024'ten beri |
+
+**Veri sağlığı** her taramada ölçülür (canlı fiyat gelen hisse sayısı, medyan yaş) ve `/durum`'da görünür; seans içinde
+canlı fiyat %50'nin altına düşer ya da 30 dk'dan bayatlarsa Telegram'a **⚠ VERİ UYARISI** gelir (günde 1).
+Tarama ~10 dk'da bir — sinyal, koşul oluştuğu turda (en geç ~10 dk içinde) gelir.
+
+**AL/SAT iyileştirme denemeleri** (o tarihteki S&P 500 üyeleri): kısa vadeli geri çekilmede giriş, RSI filtresi, 50g
+ortalama, 6 aylık / birleşik momentum, tepki yükselişinde SAT, çöküş ve hacimli şok kuralları dahil 13 varyant
+denendi; hiçbiri mevcut kuralları **iki dönemde birden** geçemedi (bazıları yalnız test döneminde iyi → aşırı uyum
+riski) → kurallar değiştirilmedi.
 
 ## Veri notları ve sınırlar
 - Opsiyon zinciri Yahoo'dan (~15 dk gecikmeli, gerçek alış/satış). **Emir öncesi canlı fiyatı kontrol et.**

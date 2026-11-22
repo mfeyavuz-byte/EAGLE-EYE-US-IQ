@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // ABD BOT — spot tarama + opsiyon öneri motoru → Telegram.
-// GitHub Actions'ta 20 dk'da bir çalışır; durum Gist'te. Bağımlılıksız (Node 20+ ESM).
+// GitHub Actions'ta seans boyunca ~10 dk'da bir çalışır; durum Gist'te (Node 22 ESM).
 //
 // Çıkış kodları: 0 = tamam · 3 = piyasa kapalı (workflow döngüsü durur) · 1 = hata
 // Ortam: TG_TOKEN TG_CHAT GH_GIST_TOKEN GIST_ID [ALPACA_KEY_ID ALPACA_SECRET_KEY]
@@ -12,7 +12,7 @@ import { logSignals, score, fmtSpotReport, checkExits, fmtExits, tradingDays, HO
 import { addWatch, removeWatch, checkWatch, fmtWatch } from "./watch.mjs";
 import { paperEnabled, runPaper, paperSummary } from "./paper.mjs";
 import { liveQuotes, alpacaEnabled, news } from "../data/alpaca.mjs";
-import { isMarketOpen, nyDate, nyParts, fmtTR } from "../data/market.mjs";
+import { isMarketOpen, isRegularHours, nyDate, nyParts, fmtTR } from "../data/market.mjs";
 import { riskFreeRate, fetchDaily, optionChain } from "../data/yahoo.mjs";
 import { loadFiles, saveFiles, READ_FAILED, gistEnabled, STATE_FILE, IVHIST_FILE, trimState } from "./state.mjs";
 import { sendTG, sendPhoto, fetchCommands } from "./telegram.mjs";
@@ -131,6 +131,21 @@ const HELP = [
   "/yardim — bu liste",
 ].join("\n");
 
+// ---------- Veri sağlığı ----------
+// liveMap: { SYM: {price, ts} } · of: taranan hisse sayısı. Sorun: Alpaca açıkken canlı fiyat < %50 ya da
+// medyan yaş > 30 dk (seans içinde). Alpaca kapalıysa kaynak Yahoo (gecikmeli) olarak bildirilir.
+export function dataHealth(liveMap, of, open = true, now = Date.now()) {
+  const ages = Object.values(liveMap || {}).map(q => (now - q.ts) / 60e3).filter(isFinite).sort((a, b) => a - b);
+  const live = ages.length, med = live ? Math.round(ages[Math.floor(live / 2)]) : null;
+  const src = alpacaEnabled() ? "Alpaca (canlı IEX + SIP günlük)" : "Yahoo (gecikmeli, Alpaca anahtarı yok)";
+  let problem = null;
+  if (open && alpacaEnabled()) {
+    if (live < of * 0.5) problem = `canlı fiyat yalnız ${live}/${of} hissede geldi`;
+    else if (med > 30) problem = `canlı fiyatlar bayat (medyan ${med} dk)`;
+  }
+  return { at: fmtTR(), src, live, of, medAgeMin: med, problem };
+}
+
 // ---------- Spot karnesi ve haftalık rapor ----------
 const daysAgo = (d, n) => new Date(Date.parse(d + "T12:00:00Z") - n * 864e5).toISOString().slice(0, 10);
 function spotScored(st) {
@@ -233,7 +248,9 @@ async function handleCommands(st, ivStore, ctx) {
         "🤖 ABD BOT — durum",
         `Evren: ${SYMS.length} hisse (S&P 500 + Nasdaq, likidite filtreli${UNI.updated ? ", " + UNI.updated.slice(0, 10) : ""})`,
         `Son tarama: ${ls ? ls.at : "yok"} · analiz edilen ${ls?.analyzed ?? 0}`,
-        `Canlı fiyat (Alpaca IEX): ${alpacaEnabled() ? "açık" : "kapalı — Yahoo kullanılıyor"}`,
+        `Veri: ${st.data ? `${st.data.src} · canlı fiyat ${st.data.live}/${st.data.of} · medyan yaş ${st.data.medAgeMin ?? "—"} dk · ölçüm ${st.data.at}` : (alpacaEnabled() ? "Alpaca açık" : "Yahoo (gecikmeli)")}` +
+          (st.data?.problem ? `\n⚠ ${st.data.problem}` : ""),
+        "Kaynaklar: hisse canlı fiyat = Alpaca IEX · günlük mumlar = Alpaca SIP (15 dk gecikmeli; yoksa Yahoo) · opsiyon zinciri = Yahoo (~15 dk gecikmeli) · haber = Alpaca/Benzinga · Investing.com kullanılmaz.",
         `IV geçmişi: ${Object.keys(ivStore).length} sembol · son kayıt ${st.lastIvDay || "yok"}`,
         `AL kuralı: momentum en iyi %${Math.round((1 - CFG.MOM_TOP) * 100)} · zirvenin %${Math.round((1 - CFG.HI52_MAX) * 100)}–${Math.round((1 - CFG.HI52_MIN) * 100)} altı · hacim ≥ ${usd(CFG.MIN_DVOL / 1e6)}M`,
         `Opsiyon: yalnız alım · put ${OCFG.PUTS ? "açık" : "kapalı"} · çıkış ${OCFG.LONG_TP != null ? "+%" + Math.round(OCFG.LONG_TP * 100) : "hedefsiz"} / ${OCFG.LONG_SL != null ? "−%" + Math.round(OCFG.LONG_SL * 100) : "stopsuz"} / ${OCFG.LONG_DTE}g`,
@@ -326,6 +343,14 @@ export async function main() {
   if (cuts) st.momCuts = cuts;
   const spyPx = liveMap.SPY?.price ?? spy.rows?.at(-1)?.close ?? null;
   console.log(`Tarama (${full ? "TAM" : "çekirdek"}): ${analyzed}/${scanSyms.length} analiz · ${signals.length} sinyal · canlı fiyat ${Object.keys(liveMap).length} · ${((Date.now() - t0) / 1e3).toFixed(0)}s`);
+
+  // --- VERİ SAĞLIĞI: canlı fiyat kaç hissede geldi, ne kadar taze? Seans içinde sorun varsa günde 1 uyarı ---
+  st.data = dataHealth(liveMap, scanSyms.length, open);
+  console.log(`Veri: ${st.data.src} · canlı ${st.data.live}/${st.data.of} · medyan yaş ${st.data.medAgeMin ?? "—"} dk`);
+  if (st.data.problem && st.dataWarnDay !== today && isRegularHours()) {
+    st.dataWarnDay = today;
+    await sendTG(`⚠ VERİ UYARISI — ${st.data.problem}\nSinyaller gecikmeli/eksik fiyatla üretilmiş olabilir. Kaynak: ${st.data.src}.`);
+  }
 
   // --- Spot sinyalleri: aynı gün aynı sinyali tekrar gönderme ---
   if (!st.sent || st.sent.date !== today) st.sent = { date: today, map: {}, n: { AL: 0, SAT: 0 } };

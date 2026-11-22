@@ -1,7 +1,7 @@
 name: ABD BOT — Spot + Opsiyon
 
 # GitHub cron'u UTC'dir ve tetikleri atlayabilir/geciktirebilir. Bu yüzden cron yalnızca
-# DÖNGÜYÜ BAŞLATIR; iş içinde piyasa kapanana dek her 20 dk tarar (bist-bot ile aynı desen).
+# DÖNGÜYÜ BAŞLATIR; iş içinde piyasa kapanana dek her ~10 dk tarar (erken tespit; tarama ~1,5 dk sürer).
 # ABD seansı 09:30–16:00 New York = 13:30–20:00 UTC (yaz) / 14:30–21:00 UTC (kış).
 # Piyasa kapalıysa run.mjs 3 koduyla çıkar → döngü biter; sonraki cron yeniden dener.
 on:
@@ -39,7 +39,7 @@ jobs:
         run: npm install --no-audit --no-fund --omit=dev
       - name: Birim testleri (bozuk kodla çalışma — hata alarmı tetiklenir)
         run: npm test
-      - name: Seans boyunca her 20 dk tara
+      - name: Seans boyunca her ~10 dk tara
         env:
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_CHAT: ${{ secrets.TG_CHAT }}
@@ -58,11 +58,11 @@ jobs:
             echo "Manuel tetik — tek run (çıkış $rc)."
             [ $rc -eq 1 ] && exit 1 || exit 0
           fi
-          for i in $(seq 1 17); do
+          for i in $(seq 1 28); do   # 28 × (~10 dk + ~1,5 dk tarama) ≈ 330 dk < 355 dk iş sınırı; kalan seansı sonraki cron devralır
             echo "=== İterasyon $i · NY $(TZ=America/New_York date +%H:%M) ==="
             node bot/run.mjs; rc=$?
             if [ $rc -eq 3 ]; then echo "Piyasa kapalı — döngü bitti."; break; fi
-            sleep 1200
+            sleep 600
           done
           exit 0
       - name: Hata alarmı

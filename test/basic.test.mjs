@@ -219,3 +219,13 @@ test("Telegram butonları: 64 bayt sınırı ve boş satırlar", async () => {
   assert.deepEqual(kb, { inline_keyboard: [[{ text: "A", callback_data: "/hisse A" }]] });
   assert.equal(keyboard(null), null);
 });
+
+test("veri sağlığı: canlı fiyat sayısı ve tazelik", async () => {
+  const { dataHealth } = await import("../bot/run.mjs");
+  const now = Date.parse("2026-11-23T16:00:00Z");
+  const fresh = Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`S${i}`, { price: 1, ts: now - 2 * 60e3 }]));
+  const h = dataHealth(fresh, 10, true, now);
+  assert.equal(h.live, 10); assert.equal(h.medAgeMin, 2);
+  // Alpaca anahtarı yoksa (testte yok) sorun bildirilmez, kaynak Yahoo olarak görünür
+  assert.equal(h.problem, null); assert.match(h.src, /Yahoo/);
+});
