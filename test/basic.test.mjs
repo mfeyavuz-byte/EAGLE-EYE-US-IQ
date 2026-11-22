@@ -229,3 +229,29 @@ test("veri sağlığı: canlı fiyat sayısı ve tazelik", async () => {
   // Alpaca anahtarı yoksa (testte yok) sorun bildirilmez, kaynak Yahoo olarak görünür
   assert.equal(h.problem, null); assert.match(h.src, /Yahoo/);
 });
+
+test("model portföy: slot sınırı, çıkışlar, dönem getirisi, rapor zamanı", async () => {
+  const M = await import("../bot/model.mjs");
+  const m = M.initModel("2026-11-02", 600);
+  assert.equal(m.lastMonthly, "2026-11"); assert.equal(m.lastQuarterly, "2026-Q4");
+  const als = Array.from({ length: 20 }, (_, i) => ({ sym: "S" + i, price: 100, stopLoss: 90, target1: 120 }));
+  let px = s => 100;
+  const r1 = M.stepModel(m, "2026-11-02", als, px, 600);
+  assert.equal(r1.bought.length, M.MCFG.SLOTS);                                   // 15 slot
+  assert.ok(m.cash >= 0 && m.cash < M.MCFG.CAPITAL * 0.01);                     // maliyet kadar küçük artık nakit
+  px = s => (s === "S0" ? 89 : s === "S1" ? 121 : 100);
+  const r2 = M.stepModel(m, "2026-11-03", [], px, 606);
+  assert.deepEqual(r2.sold.map(x => [x.sym, x.why]).sort(), [["S0", "stop"], ["S1", "hedef"]]);
+  const r3 = M.stepModel(m, "2026-12-02", [], s => 100, 612);                    // 21+ işlem günü → süre
+  assert.equal(Object.keys(m.pos).length, 0);
+  assert.ok(r3.sold.every(x => x.why === "süre"));
+  const s = M.periodStats(m, "2026-11-02");
+  assert.ok(Math.abs(s.spyRet - 0.02) < 1e-9);
+  assert.equal(s.n, 15);
+  assert.deepEqual(M.dueReports(m, "2026-12-01").out, ["monthly"]);
+  assert.deepEqual(M.dueReports({ lastMonthly: "2026-12", lastQuarterly: "2026-Q4" }, "2027-01-04").out, ["monthly", "quarterly"]);
+  assert.equal(M.prevMonthEnd("2027-01-04"), "2026-12-31");
+  assert.equal(M.prevQuarterEnd("2027-01-04"), "2026-12-31");
+  assert.equal(M.prevQuarterEnd("2026-11-15"), "2026-09-30");
+  assert.match(M.fmtModel(m, "T", "2026-11-02"), /Getiri .* SPY \+2\.00%/);
+});

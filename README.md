@@ -1,4 +1,4 @@
-# 🇺🇸 ABD BOT — Spot + Opsiyon öneri botu (Telegram)
+# 🦅 EAGLE-EYE US IQ — Spot + Opsiyon öneri botu (Telegram)
 
 GitHub Actions üzerinde kendi kendine çalışır, sunucu gerekmez. Teknik motor bist-bot'tan alındı
 (19 indikatör, `getSignals`); veri ABD için ücretsiz kaynaklardan gelir. Bağımlılık yok (Node 20+).
@@ -94,10 +94,18 @@ Beklenti: Alımda oynaklık primini sen ödersin, orta ölçekli hisselerin opsi
   model portföy, takip listesi.
 - **Takip listesi (`/takip SEMBOL`):** sahip olduğun hisse için uyarı — bot SAT seçimi verirse, 200 günlük ortalama
   aşağı kırılırsa, takipteki zirvesinden %8 geri çekilirse (`WATCH_TRAIL`).
-- **Model portföy (`/portfoy`):** repo → Settings → Secrets and variables → Actions → **Variables** → `PAPER_TRADE` = `1`.
-  Alpaca **paper** (sanal para) hesabında AL seçimlerini braket emirle alır (stop + hedef otomatik), 21 işlem gününde
-  kapatır. Yalnız hisse alımı; gerçek hesaba dokunmaz (uç nokta sabit `paper-api`). Gerçek dolumla "sinyalleri
-  uygulasaydım" sonucu.
+- **Model portföy (`/portfoy`, `bot/model.mjs`) — her zaman açık, sanal:** $100.000 (`MODEL_CAPITAL`), en çok 15
+  pozisyon (`MODEL_SLOTS`), eşit ağırlık; AL seçimleri kalite sırasıyla boş slotlara alınır, stop / hedef / 21 işlem
+  günü ile satılır; her işlemde %0.05 maliyet; günlük özsermaye ve SPY kaydı. Telegram:
+  - her alım/satımda kısa **işlem** mesajı,
+  - **haftalık rapor** her Cuma 15:30 NY sonrası (TR ~23:30),
+  - **aylık rapor** yeni ayın ilk işlem günü 10:00 NY sonrası (önceki ay),
+  - **3 aylık rapor** Ocak/Nisan/Temmuz/Ekim'in ilk işlem günü (önceki çeyrek).
+  Rapor: dönem getirisi, SPY ve fark, en büyük düşüş, kapanan işlemler, en iyi/en kötü, açık pozisyonlar.
+- **Alpaca paper (isteğe bağlı):** Variables → `PAPER_TRADE` = `1` → aynı AL'leri Alpaca **paper** hesabında braket
+  emirle uygular (gerçek dolum); gerçek hesaba dokunmaz (uç nokta sabit `paper-api`).
+- **0DTE/1DTE:** eklenmedi — yalnız alımla %90 kâr olasılığı matematiksel olarak mümkün değil (ATM'de başabaş fiyatın
+  üstünde → ~%40–45; derin ITM'de ~%50); en iyi ölçülen gün içi kural %55–61 isabet.
 - **IV geçmişi:** her gün en likit 250 hisse + SPY/QQQ/IWM için IV30 (Gist `abd_ivhist.json`) → ~20 günde IV rank.
 
 ### Komutlar
@@ -170,7 +178,7 @@ Hayatta kalan yanlılığına karşı: `F_PIT=sp500_ticker_start_end.csv` ile ar
 Repo **değişkenleri** (Variables): `PAPER_TRADE` = `1` (model portföy), `AI_MODEL` (yorum modeli).
 Herhangi bir workflow başarısız olursa Telegram'a 🚨 alarm gelir; tarama her çalışmadan önce birim testlerini koşar.
 
-5. Actions → **ABD BOT — Spot + Opsiyon** → Run workflow (`force` işaretli) → Telegram'a mesaj düşmeli.
+5. Actions → **EAGLE-EYE US IQ — Spot + Opsiyon** → Run workflow (`force` işaretli) → Telegram'a mesaj düşmeli.
 
 ## Yerel kullanım
 ```bash

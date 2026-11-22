@@ -1,4 +1,4 @@
-name: ABD BOT — Evren Yenile (haftalık)
+name: EAGLE-EYE US IQ — Evren Yenile (haftalık)
 
 # S&P 500 + Nasdaq listesi değişir (halka arzlar, endeks değişiklikleri, likidite).
 # Her Pazar evreni yeniden kurar ve spot/universe.json değiştiyse repoya commit eder.

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// ABD BOT — spot tarama + opsiyon öneri motoru → Telegram.
+// EAGLE-EYE US IQ — spot tarama + opsiyon öneri motoru → Telegram.
 // GitHub Actions'ta seans boyunca ~10 dk'da bir çalışır; durum Gist'te (Node 22 ESM).
 //
 // Çıkış kodları: 0 = tamam · 3 = piyasa kapalı (workflow döngüsü durur) · 1 = hata
@@ -21,6 +21,7 @@ import { chartUrl, chartsEnabled } from "./chart.mjs";
 import { aiComments, aiItem, AI_MODEL } from "./ai.mjs";
 import { analyzeOptions, OCFG, setEdges } from "../options/engine.mjs";
 import { calibrate, fmtCalib } from "./calib.mjs";
+import { initModel, stepModel, equity, fmtModel, dueReports, prevMonthEnd, prevQuarterEnd, shiftDays, MCFG } from "./model.mjs";
 import { runEtf, fmtEtfBook, fmtEtfState, ETF_OPT } from "./etf.mjs";
 import { etfState, ETFS_FAST } from "../spot/etfsignal.mjs";
 import { loadChain } from "../options/chain.mjs";
@@ -118,7 +119,7 @@ export function fmtDetail(a, newsList = []) {
 }
 
 const HELP = [
-  "🇺🇸 ABD BOT komutları",
+  "🦅 EAGLE-EYE US IQ komutları",
   "/hisse SEMBOL — teknik analiz (örn. /hisse NVDA)",
   "/opsiyon SEMBOL — oynaklık panosu + en iyi 3 opsiyon yapısı (örn. /opsiyon AAPL)",
   "/sinyaller — son taramanın AL/SAT listesi",
@@ -126,7 +127,7 @@ const HELP = [
   "/spotkarne — gönderilen spot sinyallerinin son 30 gündeki sonucu (SPY'a göre)",
   "/takip SEMBOL — sahip olduğun hisseyi izle (SAT seçimi, 200g kırılımı, zirveden −%8 uyarısı)",
   "/birak SEMBOL — takipten çıkar · /takiplerim — takip listesi",
-  "/portfoy — model portföy (Alpaca paper; PAPER_TRADE=1 ise)",
+  "/portfoy — model portföy (sanal, 15 slot; haftalık Cuma, aylık ve 3 aylık rapor otomatik gelir)",
   "/etf — SPY/QQQ kısa vade call/put sinyalinin durumu + ETF karnesi",
   "/sabah — açılış öncesi SPY/QQQ çağrılarının karnesi (mesaj her işlem günü ~08:00–09:30 NY)",
   "/durum — bot durumu",
@@ -285,7 +286,10 @@ async function handleCommands(st, ivStore, ctx) {
       for (const s of ETFS_FAST) lines.push(fmtEtfState(s, etfState(await etfCloses(s))));
       await sendTG(["⚡ SPY/QQQ KISA VADE (call alımı)", ...lines, "", fmtEtfBook(st)].join("\n"));
     } else if (cmd === "/portfoy") {
-      await sendTG((await paperSummary(st)) || "Model portföy kapalı. Açmak için repo → Settings → Secrets and variables → Actions → Variables → PAPER_TRADE = 1.");
+      const today = nyDate();
+      const txt = st.model ? fmtModel(st.model, "💼 MODEL PORTFÖY — son 7 gün", shiftDays(today, -7)) : "Model portföy ilk tarama gününde başlar.";
+      const paper = await paperSummary(st);
+      await sendTG(txt + (paper ? "\n\n" + paper : ""));
     } else if (cmd === "/spotkarne") {
       const today = nyDate();
       await sendTG(fmtSpotReport(spotScored(st), daysAgo(today, 30), "📈 SPOT SİNYAL KARNESİ — son 30 gün") +
@@ -297,7 +301,7 @@ async function handleCommands(st, ivStore, ctx) {
     } else if (cmd === "/durum") {
       const ls = st.lastScan;
       await sendTG([
-        "🤖 ABD BOT — durum",
+        "🤖 EAGLE-EYE US IQ — durum",
         `Evren: ${SYMS.length} hisse (S&P 500 + Nasdaq, likidite filtreli${UNI.updated ? ", " + UNI.updated.slice(0, 10) : ""})`,
         `Son tarama: ${ls ? ls.at : "yok"} · analiz edilen ${ls?.analyzed ?? 0}`,
         `Veri: ${st.data ? `${st.data.src} · canlı fiyat ${st.data.live}/${st.data.of} · medyan yaş ${st.data.medAgeMin ?? "—"} dk · ölçüm ${st.data.at}` : (alpacaEnabled() ? "Alpaca açık" : "Yahoo (gecikmeli)")}` +
@@ -453,7 +457,35 @@ export async function main() {
     if (alerts.length) await sendTG("👁 TAKİP UYARISI\n\n" + alerts.join("\n") + `\n\n${DISCLAIMER}`);
   }
 
-  // --- MODEL PORTFÖY (Alpaca paper, PAPER_TRADE=1): yeni AL'leri al, süresi dolanları kapat ---
+  // --- MODEL PORTFÖY (sanal): AL seçimleri → 15 slot, eşit ağırlık; çıkış stop/hedef/21 gün; günlük özsermaye ---
+  {
+    const px = new Map(all.map(a => [a.sym, a.price]));
+    st.model ||= initModel(today, spyPx);
+    const newAls = (fresh || []).filter(s => s.signal === "AL" && st.sent.map[s.sym] === "AL");
+    const { bought, sold } = stepModel(st.model, today, newAls, s => px.get(s), spyPx);
+    if (bought.length || sold.length) {
+      const L = ["💼 MODEL PORTFÖY — işlem"];
+      for (const b of bought) L.push(`🟢 ALINDI ${b.sym} $${b.px} (~$${b.alloc.toLocaleString("en-US")})`);
+      for (const s of sold) L.push(`${s.ret >= 0 ? "✅" : "❌"} SATILDI ${s.sym} · ${s.why} · ${s.td} gün · ${(s.ret * 100).toFixed(1)}% ($${s.pnl})`);
+      L.push(`Açık ${Object.keys(st.model.pos).length}/${MCFG.SLOTS} · özsermaye $${Math.round(equity(st.model, s => px.get(s))).toLocaleString("en-US")}`);
+      await sendTG(L.join("\n"));
+    }
+    // AYLIK / 3 AYLIK RAPOR: yeni ayın (çeyreğin) ilk işlem günü 10:00 NY sonrası, önceki dönemi özetler
+    if (mins >= 600 || process.env.MODEL_REPORT_FORCE === "1") {
+      const { out, ym, q } = dueReports(st.model, today);
+      const pxOf = s => px.get(s);
+      if (out.includes("monthly") || process.env.MODEL_REPORT_FORCE === "1") {
+        const end = prevMonthEnd(today);
+        if (await sendTG(fmtModel(st.model, `📆 MODEL PORTFÖY — AYLIK RAPOR (${end.slice(0, 7)})`, prevMonthEnd(end), pxOf, end))) st.model.lastMonthly = ym;
+      }
+      if (out.includes("quarterly") || process.env.MODEL_REPORT_FORCE === "1") {
+        const end = prevQuarterEnd(today);
+        if (await sendTG(fmtModel(st.model, `🗓 MODEL PORTFÖY — 3 AYLIK RAPOR (${end.slice(0, 7)} sonu)`, prevQuarterEnd(end), pxOf, end))) st.model.lastQuarterly = q;
+      }
+    }
+  }
+
+  // --- ALPACA PAPER (isteğe bağlı, PAPER_TRADE=1): aynı AL'leri gerçek dolumla sanal hesapta uygula ---
   if (paperEnabled()) {
     const newAls = (fresh || []).filter(s => s.signal === "AL" && st.sent.map[s.sym] === "AL");
     const lines = await runPaper(st, today, newAls, tradingDays, { risk: RISK_SPOT, maxPos: MAX_POS, hold: HOLD_DAYS });
@@ -528,6 +560,10 @@ export async function main() {
   if ((wd === "Fri" && mins >= 930 && st.lastWeekly !== today) || process.env.WEEKLY_FORCE === "1") {
     st.lastWeekly = today;
     await sendTG(weeklyReport(st, today, await paperSummary(st)));
+    if (st.model) {
+      const px = new Map(all.map(a => [a.sym, a.price]));
+      await sendTG(fmtModel(st.model, `📊 MODEL PORTFÖY — HAFTALIK RAPOR (${today})`, shiftDays(today, -7), s => px.get(s)));
+    }
   }
 
   // --- SPY/QQQ KISA VADE CALL: 15:30 NY sonrası günde 1 (kapanışa yakın gir/çık) ---
@@ -562,7 +598,7 @@ const entry = process.argv[1] ? pathToFileURL(process.argv[1]).href : "";
 if (import.meta.url === entry) {
   main().then(code => process.exit(code)).catch(async e => {
     console.error("FATAL:", e);
-    try { await sendTG("⚠ ABD BOT HATASI: " + (e?.message || e)); } catch {}
+    try { await sendTG("⚠ EAGLE-EYE US IQ HATASI: " + (e?.message || e)); } catch {}
     process.exit(1);
   });
 }
