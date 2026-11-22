@@ -3,9 +3,9 @@
 //   sonsal = (n · gözlenen + K · önsel) / (n + K)      (K = önselin "işlem sayısı" ağırlığı)
 // Gözlenen = kapanmış sinyallerin SPY'a göre fazla getirisi, 21 işlem gününe ölçeklenmiş (aylık).
 // Opsiyon motoru bu değeri (yıllık) kayma olarak kullanır → canlı kötüyse bot kendiliğinden temkinliye geçer.
-// aylık; O TARİHTEKİ S&P 500 üyeleriyle (hayatta kalan yanlılığı yok) ölçülen %5 kırpılmış ortalamanın YARISI:
-// AL ilk 10: +%1.16 → +%0.58 · SAT: −%0.12 → +%0.06 (SAT'ın avantajı uç değerlerden; medyanda ~0)
-export const PRIOR = { AL: 0.0058, SAT: 0.0006 };
+// aylık; O TARİHTEKİ S&P 500 üyeleriyle (hayatta kalan yanlılığı yok) ölçülen ortalamanın YARISI
+// (opsiyon kazancı uç hareketlerden geldiği için kırpılmamış ortalama): AL +%1.8 → +%0.9 · SAT −%0.8 → +%0.4 (doğru yön)
+export const PRIOR = { AL: 0.009, SAT: 0.004 };
 export const K = +(process.env.CALIB_K || 30);
 export const MIN_N = 10;                            // bundan az kapanmış işlemde önsel aynen kullanılır
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));

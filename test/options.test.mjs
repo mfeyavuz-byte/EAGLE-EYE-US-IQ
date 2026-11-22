@@ -112,7 +112,7 @@ test("strateji üretici: kredili spread kuralları ve iron condor", () => {
 test("yalnız-alım modu (varsayılan): sadece long call / long put, satış bacağı asla", () => {
   for (const reg of ["ucuz", "adil", "zengin"]) {
     assert.deepEqual([...allowedFor(1, reg, 1.5, 1.4)], ["LONG_CALL"]);
-    assert.equal(allowedFor(-1, reg, 1.5, 1.4).size, 0);                       // put alımı varsayılan kapalı (backtest)
+    assert.deepEqual([...allowedFor(-1, reg, 1.5, 1.4)], ["LONG_PUT"]);         // put ALIMI serbest (yalnız satış yasak)
     assert.equal(allowedFor(0, reg, 1.5, 1.0).size, 0);                         // yön yok → öneri yok
   }
   // aday üretici bile izin verilmeyen yapı üretmez
@@ -288,4 +288,25 @@ test("SPY/QQQ kısa vade: sinyal → call önerisi → 5g ortalama üstünde KAP
   assert.equal(st.etf.book.length, 2);
   assert.equal(Object.keys(st.etf.pos).length, 0);
   assert.equal((await runEtf(st, { ...deps, today: "2026-11-03" })).length, 0);   // aynı gün tekrar yok
+});
+
+test("SPY/QQQ düşüş: put ALIMI önerisi → 5g ortalama altında KAPAT; hisse SAT'ında long put serbest", async () => {
+  const { etfState } = await import("../spot/etfsignal.mjs");
+  const { runEtf } = await import("../bot/etf.mjs");
+  const down = Array.from({ length: 250 }, (_, i) => 200 - i * 0.3);         // düşen trend
+  const pop = [...down, down.at(-1) * 1.02, down.at(-1) * 1.04];             // 2 sert yükseliş günü
+  const s = etfState(pop);
+  assert.ok(!s.up200 && s.rsi2 > 90 && s.putTier === "zayıf" && !s.tier);
+  const put = (K, delta, mid) => ({ type: "P", K, delta, mid, bid: mid - 0.05, ask: mid + 0.05, spreadPct: 0.1 / mid, liquid: true, sym: `SPY261231P00${K}000` });
+  const chain = { expiries: [{ exp: 1799280000, dte: 33, calls: [], puts: [put(130, -0.6, 5), put(120, -0.3, 2)] }] };
+  const st = {};
+  let closes = pop;
+  const o1 = await runEtf(st, { today: "2026-11-02", closesFor: async () => closes, chainFor: async () => chain });
+  assert.ok(o1.some(l => l.includes("PUT (zayıf sinyal)") && l.includes("AL 130P")));
+  assert.equal(st.etf.pos.SPY.type, "P");
+  closes = [...pop, pop.at(-1) * 0.95];                                       // 5g ortalamanın altı
+  const o2 = await runEtf(st, { today: "2026-11-03", closesFor: async () => closes, chainFor: async () => chain });
+  assert.ok(o2.some(l => l.includes("ETF KAPAT") && l.includes("130P")));
+  const { allowedFor } = await import("../options/engine.mjs");
+  assert.deepEqual([...allowedFor(-1, "adil")], ["LONG_PUT"]);
 });

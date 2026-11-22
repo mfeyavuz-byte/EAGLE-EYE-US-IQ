@@ -115,12 +115,15 @@ tahmini yapmaz. Model: `AI_MODEL` repo değişkeni (varsayılan `claude-opus-5-5
 tarafı yedek model. SDK GitHub'da kurulur; kurulum ya da çağrı başarısız olursa bot yorumsuz devam eder. Maliyet: mesaj
 başına bir istek (yaklaşık birkaç sent / gün).
 
-## SPY / QQQ kısa vade call (yalnız alım)
-Kural (`spot/etfsignal.mjs`): kapanış > 200g ortalama **ve** RSI(2) < 5 (güçlü) / < 10 (normal) → **kapanış 5g
+## SPY / QQQ kısa vade call ve put (yalnız ALIM — opsiyon satışı yok)
+**Call** (`spot/etfsignal.mjs`): kapanış > 200g ortalama **ve** RSI(2) < 5 (güçlü) / < 10 (normal) → **kapanış 5g
 ortalamanın üstüne çıkınca** ya da en çok 10 işlem günü sonra çık. Ölçüm (`research/etf.mjs`, eğitim < 2014 ≤ test):
-isabet SPY %82 / %78, QQQ %71 / %81; ort. +%0.6–0.8; ~3 gün; günlük getiri tabanın 4–6 katı. Düşüş (put) kuralları
-tutarsız → kullanılmaz. Bot 15:30 NY sonrası günde bir kontrol eder; sinyalde canlı zincirden call önerir (vade ≥
-`ETF_DTE`=30 gün, delta ≈ `ETF_DELTA`=0.6, likit), çıkış koşulunda **"📕 ETF KAPAT"** gönderir, ETF karnesine yazar.
+isabet SPY %82 / %78, QQQ %71 / %81; ort. +%0.6–0.8; ~3 gün; günlük getiri tabanın 4–6 katı.
+**Put** (zayıf): kapanış < 200g ortalama **ve** RSI(2) > 90 → kapanış 5g ortalamanın **altına inince** çık. Ölçüm: isabet
+SPY %72 / %59, QQQ %55 / %63; ort. düşüş +%0.15–0.94 — dört ölçümde pozitif ama call'dan zayıf (`ETF_PUTS=0` kapatır).
+Bot 15:30 NY sonrası günde bir kontrol eder; sinyalde canlı zincirden kontrat önerir (vade ≥ `ETF_DTE`=30 gün,
+|delta| ≈ `ETF_DELTA`=0.6, likit), çıkış koşulunda **"📕 ETF KAPAT"** gönderir, ETF karnesine yazar.
+**Hisse SAT seçimlerinde long put** önerilir (`OPT_PUTS=0` kapatır); her fikir yönetilen işlem simülasyonu + Kelly'den geçer.
 Vade/delta seçimi: Actions → **ETF opsiyon geriye dönük test** (14/30/60 gün × delta 0.5/0.7, gerçek opsiyon fiyatları).
 
 ## Geriye dönük test ve araştırma

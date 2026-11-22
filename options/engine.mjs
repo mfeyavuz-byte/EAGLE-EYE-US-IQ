@@ -19,12 +19,13 @@ export const OCFG = {
   ACCOUNT: +(process.env.OPT_ACCOUNT || 10000),      // boyutlandırma için hesap büyüklüğü ($)
   RISK: +(process.env.OPT_RISK || 0.02),             // işlem başına hesabın en çok %2'si riske
   // KALİBRE YÖN (başlangıç değeri; canlıda bot/calib.mjs günceller): O TARİHTEKİ S&P 500 üyeleriyle (hayatta
-  // kalan yanlılığı yok) 21 günlük fazla getiri, %5 kırpılmış ortalama:
-  //   AL (günde ilk 10): +%1.16/ay → YARISI +%0.58/ay ≈ yıllık +0.07
-  //   SAT: −%0.12/ay → YARISI ≈ yıllık −0.007 (pratikte sıfır; put zaten kapalı)
-  // Yarıya indirme: aşırı uyum + rejim değişimi payı. Kayma = r − q + bu fazla getiri.
-  EDGE_AL: +(process.env.OPT_EDGE_AL || 0.07),
-  EDGE_SAT: +(process.env.OPT_EDGE_SAT || 0.007),
+  // kalan yanlılığı yok) 21 günlük fazla getiri, ORTALAMA (kırpılmamış — alınan opsiyonun kazancı uç hareketlerden
+  // gelir, bu yüzden uçları atmak opsiyon için yanlış olur):
+  //   AL (günde ilk 10): +%1.5 / +%2.1 → ort. +%1.8/ay → YARISI +%0.9/ay ≈ yıllık +0.10
+  //   SAT: −%0.7 / −%0.9 → ort. −%0.8/ay → YARISI −%0.4/ay ≈ yıllık −0.05
+  // Yarıya indirme: aşırı uyum + rejim değişimi payı. Kayma = r − q ± bu fazla getiri.
+  EDGE_AL: +(process.env.OPT_EDGE_AL || 0.10),
+  EDGE_SAT: +(process.env.OPT_EDGE_SAT || 0.05),
   // Eski (kalibresiz) eğim: yalnız filtre bilgisi olmayan çağrılarda (testler) — score·TILT·σ/√T
   TILT: +(process.env.OPT_TILT || 0.15),
   // Vade yapısı (yakın IV / IV30). > INV → ters: oynaklık avantajı iddia edilmez (σ ≥ IV).
@@ -37,10 +38,11 @@ export const OCFG = {
   // KULLANICI KURALI: yalnızca opsiyon ALIMI (long call / long put). Hiçbir bacağı satış olan yapı önerilmez —
   // kredili spread, iron condor ve borçlu spread'ler (ikinci bacağı satış) dahil. OPT_LONG_ONLY=0 ile eski matris.
   LONG_ONLY: process.env.OPT_LONG_ONLY !== "0",
-  // PUT ALIMI KAPALI (varsayılan): opsiyon geriye dönük testi (Mar 2024–Eki 2026, 120 put) — SAT seçimlerine put
-  // almak %0 maliyette bile −%10, %3 maliyette −%16 prim getirisi (PF 0.59). Aynı hisselere call bile kazandırırdı.
-  // Spot SAT sinyalleri (çık/girme uyarısı) sürer; yalnız put ÖNERİSİ verilmez. OPT_PUTS=1 ile açılır.
-  PUTS: process.env.OPT_PUTS === "1",
+  // PUT ALIMI AÇIK (kullanıcı kuralı: yalnız SATIŞ/short yasak; long call ve long put serbest).
+  // SAT seçimlerinde long put önerilir; yönetilen işlem simülasyonu + Kelly elemesi her fikre ayrıca uygulanır.
+  // (Not: ilk opsiyon testinde SAT → put boğa piyasasında zarardaydı; canlı karne ve kalibrasyon bunu izler.)
+  // OPT_PUTS=0 ile kapatılabilir.
+  PUTS: process.env.OPT_PUTS !== "0",
   // Long opsiyon çıkış kuralı (opsiyon geriye dönük testindeki varyant karşılaştırmasıyla seçilir).
   // LONG_TP: prim getirisi (1 = +%100; "none" = kâr hedefi yok) · LONG_SL: prim kaybı (0.5 = −%50; "none" = stop yok)
   // LONG_DTE: vadeye bu kadar gün kala kapat
@@ -105,7 +107,7 @@ export async function analyzeOptions(sym, { spot, daily, r, hist = null, top = 3
       : stress && (vol.regime === "zengin" || (vol.ivhv ?? 0) >= 1.1)
       ? "Oynaklık pahalı ama vade yapısı belirgin ters (stres) → yönsüz prim satışı yapılmaz (BEKLE)."
       : "Yön yok ve oynaklık pahalı değil → avantajlı opsiyon yapısı yok (BEKLE).")
-    : d.dir < 0 && OCFG.LONG_ONLY && !OCFG.PUTS ? "SAT seçimi — ama put ALIMI geriye dönük testte her maliyet senaryosunda zarar ettirdi → put önerilmez (OPT_PUTS=1 ile açılır). Spotta: çık / girme." : "Uygun yapı yok." };
+    : d.dir < 0 && OCFG.LONG_ONLY && !OCFG.PUTS ? "SAT seçimi — put önerisi ayarla kapatılmış (OPT_PUTS=0). Spotta: çık / girme." : "Uygun yapı yok." };
 
   const now = Date.now();
   const ideas = [], pre = [];

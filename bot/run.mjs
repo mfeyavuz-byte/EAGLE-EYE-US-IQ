@@ -249,7 +249,7 @@ async function handleCommands(st, ivStore, ctx) {
 // Yalnız alım modunda nötr hisseler atlanır (yönsüz alım önerilmez) ve yönlü aday sayısı artırılır.
 async function dailyOptionIdeas(signals, all, ivStore, r, spyRet60) {
   const liquid = a => a.dollarVol >= 150e6 && a.price >= 15;
-  const [nAl, nSat] = OCFG.LONG_ONLY ? [14, OCFG.PUTS ? 10 : 0] : [10, 6];   // put kapalıysa SAT adayı taranmaz
+  const [nAl, nSat] = OCFG.LONG_ONLY ? [14, OCFG.PUTS ? 10 : 0] : [10, 6];   // SAT adayları long put için (OPT_PUTS=0 ise taranmaz)
   const dirC = [...signals.filter(s => s.signal === "AL" && liquid(s)).slice(0, nAl), ...signals.filter(s => s.signal === "SAT" && liquid(s)).slice(0, nSat)];
   const neuC = OCFG.LONG_ONLY ? [] : all.filter(a => liquid(a) && (a.signal === "NÖTR" || a.adx < 20)).sort((a, b) => b.dollarVol - a.dollarVol).slice(0, 8);
   const etfSpots = await Promise.all(ETFS.map(s => analyze(s, { spyRet60 }).catch(() => null)));

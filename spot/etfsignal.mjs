@@ -4,9 +4,11 @@
 // Ölçüm (1993/1999–2026, eğitim < 2014 ≤ test), dayanak üzerinde:
 //   SPY RSI2<5: isabet %82 / %78 · ort +%0.82 / +%0.63 · ~3.3 gün   (taban: her gün al 4 gün tut %56/%60, +%0.13/+%0.19)
 //   QQQ RSI2<5: isabet %71 / %81 · ort +%0.67 / +%0.72 · ~3.5 gün
-//   Düşüş yönü (put) kuralları tutarsız → kullanılmaz.
+// PUT (düşüş): kapanış < 200g ortalama VE RSI(2) > 90 → kapanış 5g ortalamanın ALTINA inince çık (en çok 10 gün).
+//   Ölçüm: SPY isabet %72 / %59 · ort +%0.94 / +%0.15 · QQQ %55 / %63 · +%0.21 / +%0.35 → dört ölçümde de pozitif
+//   ama call kuralından belirgin ZAYIF; mesajda "zayıf" olarak işaretlenir.
 export const ETFS_FAST = ["SPY", "QQQ"];
-export const ETF_CFG = { RSI_STRONG: 5, RSI_NORMAL: 10, MAXD: 10 };
+export const ETF_CFG = { RSI_STRONG: 5, RSI_NORMAL: 10, RSI_PUT: 90, MAXD: 10 };
 
 export function rsiSeries(c, n = 2) {
   const out = new Array(c.length).fill(null);
@@ -28,5 +30,6 @@ export function etfState(closes) {
   const r = rsiSeries(closes, 2)[i], s200 = smaAt(closes, i, 200), s5 = smaAt(closes, i, 5), p = closes[i];
   const up200 = p > s200;
   const tier = up200 && r < ETF_CFG.RSI_STRONG ? "güçlü" : up200 && r < ETF_CFG.RSI_NORMAL ? "normal" : null;
-  return { tier, rsi2: r, up200, sma5: s5, sma200: s200, price: p, exit: p > s5 };
+  const putTier = !up200 && r > ETF_CFG.RSI_PUT ? "zayıf" : null;
+  return { tier, putTier, rsi2: r, up200, sma5: s5, sma200: s200, price: p, exit: p > s5, putExit: p < s5 };
 }
