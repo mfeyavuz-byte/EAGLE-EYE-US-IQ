@@ -15,14 +15,21 @@ GitHub Actions üzerinde kendi kendine çalışır, sunucu gerekmez. Teknik moto
 
 ## Ne yapar
 **Spot** — seans boyunca 20 dk'da bir evreni tarar, filtreyi geçen **yeni** AL/SAT sinyallerini yollar.
-Filtre: güven ≥ 65 · ADX ≥ 20 · ort. işlem hacmi ≥ 20M$ · haftalık trendle uyum · AL için RSI < 63 ve hacim temposu ≥ 0.7×.
+Filtre (ABD için sıkılaştırıldı; BIST eşikleriyle 1.328 hissenin 414'ü geçiyordu):
+- Ortak: ort. işlem hacmi ≥ 50M$.
+- **AL**: güven ≥ 75 · ADX ≥ 20 · haftalık trend aşağı değil · **SPY'dan güçlü** (60g göreli güç > 0) · RSI < 63 ·
+  hacim temposu ≥ 0.7× (dip dönüşü sinyalleri trend/göreli güç şartından muaf).
+- **SAT**: güven ≥ 80 · ADX ≥ 25 · haftalık trend AŞAĞI · SPY'dan zayıf · RSI ≥ 30 (aşırı satılmışa geç SAT yok).
+- Sıralama: kalite puanı (güven + trend gücü + göreli güç + hacim). **Günlük kota**: en iyi 10 AL + 6 SAT;
+  kalanlar `/sinyaller` ile görülür.
 
 **Opsiyon** — günde 2 kez (10:15 ve 14:00 New York) en iyi 6 opsiyon fikri + istek üzerine `/opsiyon SEMBOL`.
 Karar zinciri:
-1. **Yön**: spot sinyali ve güveni (güven < %60 → nötr sayılır).
+1. **Yön**: spot sinyali — yalnızca spot filtresini geçmişse (aksi halde nötr sayılır).
 2. **Oynaklık rejimi**: IV rank (≥20 günlük geçmiş varsa) yoksa IV/HV oranı → *ucuz / adil / zengin*.
-3. **Olay**: bilanço vade içindeyse prim SATAN yapılar (kredili spread, iron condor) o vadede yasak;
-   oynaklık avantajı iddia edilmez. Ters vade yapısı uyarısı.
+3. **Olay / stres**: bilanço vade içindeyse prim SATAN yapılar (kredili spread, iron condor) o vadede yasak;
+   oynaklık avantajı iddia edilmez. Vade yapısı ters (> 1.10) → σ ≥ IV (oynaklık avantajı iddia edilmez);
+   **belirgin ters (> 1.25) → iron condor yasak** (yönsüz prim satışı stres dönemlerinde en çok yara alan işlemdir).
 4. **Matris**:
 
 | Yön \ IV | ucuz | adil | zengin |
@@ -31,6 +38,8 @@ Karar zinciri:
 | Aşağı | long put · bear put spread | bear put · bear call spread | bear call · bear put spread |
 | Nötr | — (bekle) | iron condor (IV/HV ≥ 1.1 ise) | iron condor |
 
+*(Nötr satırı vade yapısı > 1.25 iken boştur.)*
+
 5. **Her aday** 14–75 gün vadede, delta aralıklarıyla kurulur ve **gerçekçi dolumla** (orta ± %30 spread) fiyatlanır.
    - **Dayanak fiyatı zincirden** (put-call paritesi) alınır: hisse kotasyonu ile opsiyon kotasyonları farklı anlarda
      alınmış olabilir; bu fark IV'yi ve olasılıkları bozar.
@@ -38,10 +47,12 @@ Karar zinciri:
    - **Piyasanın** kâr olasılığı: log-normal, ATM IV, piyasa skew'unun tamamı.
    - **Bizim** kâr olasılığımız ve **beklenen değer (EV)**: kalın kuyruklu Student-t (ν=4) + sola çarpıklık
      (piyasa skew'unun %70'i), σ = 0.6·(0.9·IV) + 0.4·max(YZ20, ort(YZ20, HV60)), kayma = r − q (piyasayla aynı)
-     + sinyal yönünde en fazla 0.15σ eğim. Bilanço vade içindeyse σ ≥ IV, vade yapısı tersse σ ≥ 0.95·IV.
+     + sinyal yönünde en fazla 0.15σ eğim. Bilanço vade içindeyse ya da vade yapısı tersse σ ≥ IV.
    - EV **ikiye ayrılır**: fiyatlama farkı (oynaklık/skew) ve yön tahmini — hangisine güvendiğini görürsün.
+   - **Yön payına güven %50**: eleme ve sıralamada yön kaynaklı EV yarı ağırlıkla sayılır (`OPT_DIR_TRUST`).
+     Spot sinyalinin ABD isabeti doğrulanana dek avantajı yalnızca yön tahminine dayanan fikir geçmez.
    - Ayrıca en kötü %5 senaryo ortalaması (CVaR) ve net Greek'ler.
-6. **Eleme**: EV ≤ 0 veya EV/maks zarar < %3 → elenir; kredili yapılarda kâr olasılığı ≥ %55, borçlularda ≥ %30;
+6. **Eleme**: EV ≤ 0 veya (yön payı indirimli) EV/maks zarar < %3 → elenir; kredili yapılarda kâr olasılığı ≥ %55, borçlularda ≥ %30;
    bacak başına OI ≥ 100 ve spread ≤ %12. Sıralama: avantaj − spread maliyeti + olasılık − vade sapması.
 7. Her fikirde **boyut** (hesabın %2 riski) ve **yönetim kuralı** (kredili: %50 kârda kapat, 21 gün kala çık, 2× kredi zararda dur).
 
@@ -88,8 +99,9 @@ DRY_RUN=1 FORCE=1 OPT_FORCE=1 SYMBOLS=AAPL,NVDA,SPY node bot/run.mjs   # opsiyon
 npm run universe                                 # evreni yeniden kur (spot/universe.json)
 npm run backtest                                 # spot eşiklerinin ABD'deki isabeti
 ```
-Ayarlar (env): `MIN_CONF`, `MIN_ADX`, `MAX_RSI_BUY`, `MIN_DVOL`, `CORE_N` · opsiyon: `OPT_MIN_EDGE`, `OPT_ACCOUNT`,
-`OPT_RISK`, `OPT_MIN_OI`, `OPT_MAX_SPREAD`, `OPT_SLIP`, `OPT_TILT`, `IV_TOP`.
+Ayarlar (env): `MIN_CONF`, `MIN_CONF_SAT`, `MIN_ADX`, `MIN_ADX_SAT`, `MAX_RSI_BUY`, `MIN_RSI_SAT`, `MIN_DVOL`,
+`MAX_AL_DAY`, `MAX_SAT_DAY`, `CORE_N` · opsiyon: `OPT_MIN_EDGE`, `OPT_ACCOUNT`, `OPT_RISK`, `OPT_MIN_OI`,
+`OPT_MAX_SPREAD`, `OPT_SLIP`, `OPT_TILT`, `OPT_DIR_TRUST`, `OPT_INV`, `OPT_INV_HARD`, `IV_TOP`.
 
 ## Dosyalar
 ```

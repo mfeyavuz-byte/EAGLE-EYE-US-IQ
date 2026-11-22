@@ -26,6 +26,20 @@ const usd = v => (v == null ? "—" : "$" + (+v).toLocaleString("en-US", { maxim
 const sgn = v => (v >= 0 ? "+" : "") + v;
 const DISCLAIMER = "⚠ Yatırım tavsiyesi değildir.";
 
+// Günlük üst sınır: filtreyi geçenlerden yalnızca en kaliteli ilk N yeni sinyal gönderilir (gürültü freni).
+export const DAY_CAP = { AL: +(process.env.MAX_AL_DAY || 10), SAT: +(process.env.MAX_SAT_DAY || 6) };
+// signals kalite sırasıyla gelir (scanAll). Aynı gün aynı sinyal tekrar gönderilmez; kota dolunca kalanlar bekler.
+export function pickFresh(signals, sent, cap = DAY_CAP) {
+  sent.n ||= { AL: 0, SAT: 0 };
+  const out = [];
+  for (const s of signals) {
+    if (sent.map[s.sym] === s.signal) continue;
+    if ((sent.n[s.signal] || 0) >= (cap[s.signal] ?? 0)) continue;
+    sent.map[s.sym] = s.signal; sent.n[s.signal] = (sent.n[s.signal] || 0) + 1; out.push(s);
+  }
+  return out;
+}
+
 // ---------- Mesaj biçimleri ----------
 export function fmtSignal(a) {
   const icon = a.signal === "AL" ? "🟢" : "🔴";
@@ -192,9 +206,9 @@ export async function main() {
   console.log(`Tarama (${full ? "TAM" : "çekirdek"}): ${analyzed}/${scanSyms.length} analiz · ${signals.length} sinyal · canlı fiyat ${Object.keys(liveMap).length} · ${((Date.now() - t0) / 1e3).toFixed(0)}s`);
 
   // --- Spot sinyalleri: aynı gün aynı sinyali tekrar gönderme ---
-  if (!st.sent || st.sent.date !== today) st.sent = { date: today, map: {} };
-  const fresh = signals.filter(s => st.sent.map[s.sym] !== s.signal);
-  fresh.forEach(s => { st.sent.map[s.sym] = s.signal; });
+  if (!st.sent || st.sent.date !== today) st.sent = { date: today, map: {}, n: { AL: 0, SAT: 0 } };
+  const fresh = pickFresh(signals, st.sent);
+  const held = signals.filter(x => st.sent.map[x.sym] !== x.signal).length;   // kota yüzünden bekleyenler
   const firstOfDay = st.lastHeaderDay !== today;
   if (fresh.length || firstOfDay) {
     const al = fresh.filter(s => s.signal === "AL"), sat = fresh.filter(s => s.signal === "SAT");
@@ -203,11 +217,12 @@ export async function main() {
     if (sat.length) m += `\nSAT (${sat.length})\n` + sat.slice(0, 10).map(fmtSignal).join("\n") + "\n";
     if (!al.length && !sat.length) m += "\nFiltreyi geçen yeni sinyal yok.\n";
     if (analyzed === 0) m += "\n⚠ Hiçbir sembol analiz edilemedi — veri kaynağı sorunu olabilir.\n";
+    if (held) m += `\n(+${held} sinyal daha filtreyi geçti; günlük kota AL ${DAY_CAP.AL} / SAT ${DAY_CAP.SAT} — liste: /sinyaller)\n`;
     m += `\n${analyzed}/${SYMS.length} hisse tarandı · SAT = spotta çık/girme · ${DISCLAIMER}`;
     await sendTG(m);
     st.lastHeaderDay = today;
   } else console.log("Yeni spot sinyali yok — mesaj gönderilmedi.");
-  st.lastScan = { at: fmtTR(), analyzed, signals: signals.slice(0, 30) };
+  st.lastScan = { at: fmtTR(), analyzed, signals: signals.slice(0, 60) };
 
   // --- Opsiyon fikirleri: günde 2 kez (10:15 ve 14:00 NY; açılış spread'leri geniş olduğu için 10:15) ---
   const slot = mins >= 840 ? "PM" : mins >= 615 ? "AM" : null;

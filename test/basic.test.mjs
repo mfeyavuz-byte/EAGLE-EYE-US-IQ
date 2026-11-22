@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { isRegularHours, sessionFraction, nyDate } from "../data/market.mjs";
 import { passes } from "../spot/scan.mjs";
-import { fmtSignal, diversify } from "../bot/run.mjs";
+import { fmtSignal, diversify, pickFresh } from "../bot/run.mjs";
 
 test("opsiyon fikirlerinde yoğunlaşma koruması", () => {
   const mk = (sym, code, dir) => ({ sym, idea: { code, dir } });
@@ -42,6 +42,27 @@ test("filtre: kaliteli AL geçer, zayıflar elenir", () => {
   assert.equal(passes({ ...base, htf: "ASAGI" }), false);
   assert.equal(passes({ ...base, htf: "ASAGI", adx: 10, dip: 2 }), true);  // dip dönüşü muaf
   assert.equal(passes({ ...base, signal: "SAT", htf: "YUKARI" }), false);
+  assert.equal(passes({ ...base, rs60: -3 }), false);                      // AL: SPY'dan zayıfsa elenir
+  assert.equal(passes({ ...base, dollarVol: 30e6 }), false);               // 50M$ altı
+});
+
+test("filtre: SAT yalnızca teyitli düşüşte", () => {
+  const sat = { ...base, signal: "SAT", confidence: 85, adx: 30, htf: "ASAGI", rsi: 38, rs60: -12 };
+  assert.equal(passes(sat), true);
+  assert.equal(passes({ ...sat, htf: "YAN" }), false);                     // haftalık trend aşağı değil
+  assert.equal(passes({ ...sat, confidence: 75 }), false);
+  assert.equal(passes({ ...sat, adx: 22 }), false);
+  assert.equal(passes({ ...sat, rs60: 4 }), false);                        // SPY'dan güçlü hisseye SAT yok
+  assert.equal(passes({ ...sat, rsi: 24 }), false);                        // zaten aşırı satılmış → geç
+});
+
+test("günlük kota: en kaliteli N yeni sinyal, tekrar yok", () => {
+  const mk = (sym, signal) => ({ sym, signal });
+  const sigs = ["A", "B", "C", "D"].map(s => mk(s, "AL")).concat(["X", "Y"].map(s => mk(s, "SAT")));
+  const sent = { date: "d", map: {} };
+  assert.deepEqual(pickFresh(sigs, sent, { AL: 2, SAT: 1 }).map(s => s.sym), ["A", "B", "X"]);
+  assert.deepEqual(pickFresh(sigs, sent, { AL: 2, SAT: 1 }).map(s => s.sym), []);   // kota doldu, tekrar yok
+  assert.deepEqual(pickFresh(sigs, sent, { AL: 3, SAT: 1 }).map(s => s.sym), ["C"]);
 });
 
 test("SAT sinyalinde stop fiyatın üstünde, hedef altında", async () => {

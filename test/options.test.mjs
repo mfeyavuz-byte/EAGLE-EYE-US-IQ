@@ -115,8 +115,12 @@ test("yön × rejim matrisi", () => {
   assert.deepEqual([...allowedFor(-1, "zengin")], ["BEAR_CALL", "BEAR_PUT"]);
   assert.deepEqual([...allowedFor(0, "zengin")], ["IRON_CONDOR"]);
   assert.equal(allowedFor(0, "ucuz").size, 0);
+  assert.deepEqual([...allowedFor(0, "zengin", 1.5, 1.15)], ["IRON_CONDOR"]);   // hafif ters: izin var (σ ≥ IV)
+  assert.equal(allowedFor(0, "zengin", 1.5, 1.4).size, 0);                     // belirgin ters: condor yasak
+  assert.deepEqual([...allowedFor(-1, "zengin", 1.5, 1.4)], ["BEAR_CALL", "BEAR_PUT"]);   // yönlü yapılar sürer
   assert.equal(directionOf({ signal: "AL", confidence: 90 }).dir, 1);
   assert.equal(directionOf({ signal: "AL", confidence: 55 }).dir, 0);   // zayıf sinyal → nötr
+  assert.equal(directionOf({ signal: "SAT", confidence: 72, passed: false }).dir, 0);   // filtre dışı → nötr
 });
 
 test("HV, IV rank ve IV geçmişi kaydı", () => {

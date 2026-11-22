@@ -17,20 +17,30 @@ export const OCFG = {
   RISK: +(process.env.OPT_RISK || 0.02),             // işlem başına hesabın en çok %2'si riske
   // En güçlü sinyalde bile en fazla 0.15σ yön eğimi. Spot sinyalinin ABD isabeti backtest'le doğrulanınca artırılabilir.
   TILT: +(process.env.OPT_TILT || 0.15),
+  // Vade yapısı (yakın IV / IV30). > INV → ters: oynaklık avantajı iddia edilmez (σ ≥ IV).
+  // > INV_HARD → belirgin stres: iron condor (yönsüz prim satışı) yasak — büyük hareketler tam bu dönemlerde gelir.
+  INV: +(process.env.OPT_INV || 1.1),
+  INV_HARD: +(process.env.OPT_INV_HARD || 1.25),
+  // Yön tahmininin EV katkısına güven payı. Spot sinyalinin ABD isabeti /karne ve backtest'le doğrulanana dek
+  // yön kaynaklı EV yarı ağırlıkla sayılır → avantajı YALNIZCA yön tahminine dayanan fikir zor geçer.
+  DIR_TRUST: +(process.env.OPT_DIR_TRUST || 0.5),
 };
 
 // Spot analizinden yön puanı. Güven 50 → 0, 100 → ±1.
 export function directionOf(a) {
   if (!a || a.signal === "NÖTR") return { dir: 0, score: 0, label: "NÖTR" };
+  // Spot kalite filtresini geçmeyen sinyal (zayıf trend, SPY'a göre ters göreli güç vb.) yön sayılmaz.
+  if (a.passed === false) return { dir: 0, score: 0, label: `NÖTR (${a.signal} %${a.confidence} filtreden geçmedi)` };
   const s = Math.max(0, Math.min(1, ((a.confidence || 50) - 50) / 50));
   if (s < 0.2) return { dir: 0, score: 0, label: "NÖTR (zayıf sinyal)" };
   return a.signal === "AL" ? { dir: 1, score: s, label: `YUKARI (AL %${a.confidence})` } : { dir: -1, score: -s, label: `AŞAĞI (SAT %${a.confidence})` };
 }
 
-// Yön × rejim matrisi
-export function allowedFor(dir, regime, ivhv) {
+// Yön × rejim matrisi (+ stres freni: vade yapısı belirgin tersse yönsüz prim satışı yok)
+export function allowedFor(dir, regime, ivhv, termRatio = null) {
   if (dir > 0) return new Set(regime === "ucuz" ? ["LONG_CALL", "BULL_CALL"] : regime === "zengin" ? ["BULL_PUT", "BULL_CALL"] : ["BULL_CALL", "BULL_PUT"]);
   if (dir < 0) return new Set(regime === "ucuz" ? ["LONG_PUT", "BEAR_PUT"] : regime === "zengin" ? ["BEAR_CALL", "BEAR_PUT"] : ["BEAR_PUT", "BEAR_CALL"]);
+  if (termRatio && termRatio > OCFG.INV_HARD) return new Set();
   if (regime === "zengin" || (regime === "adil" && (ivhv ?? 0) >= 1.1)) return new Set(["IRON_CONDOR"]);
   return new Set();
 }
@@ -41,13 +51,18 @@ export async function analyzeOptions(sym, { spot, daily, r, hist = null, top = 3
   if (!chain || !chain.expiries.length) return { sym, error: "Opsiyon zinciri alınamadı (opsiyonu olmayan/illikit hisse olabilir)." };
   const vol = volDashboard(chain, daily, hist);
   const d = directionOf(spot);
-  const allowed = allowedFor(d.dir, vol.regime, vol.ivhv);
+  const allowed = allowedFor(d.dir, vol.regime, vol.ivhv, vol.termRatio);
+  const stress = vol.termRatio && vol.termRatio > OCFG.INV_HARD;
   const reasons = [`Yön: ${d.label}`, `Oynaklık: ${vol.regime}${vol.rank != null ? ` (IV rank ${vol.rank})` : vol.ivhv ? ` (IV/HV ${vol.ivhv.toFixed(2)})` : ""}`];
-  if (vol.termRatio && vol.termRatio > 1.1) reasons.push(`Vade yapısı TERS (${vol.termRatio.toFixed(2)}) — yakın vadede olay/stres fiyatlanıyor`);
+  if (vol.termRatio && vol.termRatio > OCFG.INV) reasons.push(`Vade yapısı TERS (${vol.termRatio.toFixed(2)}) — yakın vadede olay/stres fiyatlanıyor${stress ? "; yönsüz prim satışı (iron condor) yasak" : ""}`);
   if (Math.abs(chain.parityGap) >= 0.002) reasons.push(`Dayanak fiyatı zincirden (parite) alındı: $${chain.S.toFixed(2)} (kotasyon $${chain.Squote.toFixed(2)}, fark ${(chain.parityGap * 100).toFixed(2)}%)`);
   const base = { sym, S: chain.S, vol, dir: d, reasons, allowed: [...allowed] };
   if (chain.S < 10) return { ...base, ideas: [], note: "Fiyat < $10 — opsiyon spread'leri genelde verimsiz." };
-  if (!allowed.size) return { ...base, ideas: [], note: d.dir === 0 ? "Yön yok ve oynaklık pahalı değil → avantajlı opsiyon yapısı yok (BEKLE)." : "Uygun yapı yok." };
+  if (!allowed.size) return { ...base, ideas: [], note: d.dir === 0
+    ? (stress && (vol.regime === "zengin" || (vol.ivhv ?? 0) >= 1.1)
+      ? "Oynaklık pahalı ama vade yapısı belirgin ters (stres) → yönsüz prim satışı yapılmaz (BEKLE)."
+      : "Yön yok ve oynaklık pahalı değil → avantajlı opsiyon yapısı yok (BEKLE).")
+    : "Uygun yapı yok." };
 
   const now = Date.now();
   const ideas = [];
@@ -64,10 +79,9 @@ export async function analyzeOptions(sym, { spot, daily, r, hist = null, top = 3
     // Fiziksel oynaklık: piyasa IV'si en iyi tek tahmincidir → %60 ağırlık (tarihsel risk primi düşülmüş ~%90'ı),
     // %40 gerçekleşen oynaklık tahmini. Muhafazakâr kurallar:
     //  • bilanço vade içinde → oynaklık avantajı İDDİA EDİLMEZ: σ ≥ IV
-    //  • vade yapısı ters (piyasa stres fiyatlıyor) → σ ≥ 0.95·IV
+    //  • vade yapısı ters (piyasa stres fiyatlıyor) → σ ≥ IV (gerçekleşen oynaklık geride kalır, risk primi iddia edilmez)
     let sigP = vol.hvF ? 0.6 * 0.9 * ivEx + 0.4 * vol.hvF : 0.9 * ivEx;
-    if (earnInside) sigP = Math.max(sigP, ivEx);
-    else if (vol.termRatio && vol.termRatio > 1.1) sigP = Math.max(sigP, 0.95 * ivEx);
+    if (earnInside || (vol.termRatio && vol.termRatio > OCFG.INV)) sigP = Math.max(sigP, ivEx);
     // Kayma: taban = piyasanın ileri fiyatı (r − q) → yönsüz senaryoda ne boğa ne ayı yapılarına sistematik avantaj.
     // Üstüne sinyal eğimi: toplam = score·TILT·σ√T.
     const mu0 = chain.r - chain.q;
@@ -81,13 +95,16 @@ export async function analyzeOptions(sym, { spot, daily, r, hist = null, top = 3
 
     for (const c of candidates(ex, chain.S, allow)) {
       if (!isFinite(c.maxLoss) || c.maxLoss <= 0) continue;
-      const e = evaluate(c.L, c.debit, phys), m = evaluate(c.L, c.debit, mkt);
-      const edge = e.ev / c.maxLoss;
-      if (e.ev <= 0 || edge < OCFG.MIN_EDGE) continue;
+      const e = evaluate(c.L, c.debit, phys);
+      if (e.ev <= 0 || e.ev / c.maxLoss < OCFG.MIN_EDGE) continue;
       if (e.pop < (c.kind === "credit" ? 0.55 : 0.3)) continue;
-      const score = edge - 0.3 * c.spreadAvg + 0.05 * (e.pop - 0.5) - 0.0015 * Math.abs(ex.dte - 38) + (c.oiMin >= 1000 ? 0.01 : 0);
       const evVol = flat === phys ? e.ev : evaluate(c.L, c.debit, flat).ev;   // oynaklık (+ maliyet) kaynaklı kısım
-      ideas.push({ ...c, exp: ex.exp, dte: ex.dte, expDate: new Date(ex.exp * 1e3).toISOString().slice(0, 10), ivEx, sigP, earnInside, ev: e.ev, evVol, evDir: e.ev - evVol, pop: e.pop, cvar5: e.cvar5, popMkt: m.pop, edge, score });
+      const evAdj = evVol + OCFG.DIR_TRUST * (e.ev - evVol);                  // yön payı güven oranıyla
+      const edge = evAdj / c.maxLoss;
+      if (evAdj <= 0 || edge < OCFG.MIN_EDGE) continue;
+      const m = evaluate(c.L, c.debit, mkt);
+      const score = edge - 0.3 * c.spreadAvg + 0.05 * (e.pop - 0.5) - 0.0015 * Math.abs(ex.dte - 38) + (c.oiMin >= 1000 ? 0.01 : 0);
+      ideas.push({ ...c, exp: ex.exp, dte: ex.dte, expDate: new Date(ex.exp * 1e3).toISOString().slice(0, 10), ivEx, sigP, earnInside, ev: e.ev, evVol, evDir: e.ev - evVol, evAdj, pop: e.pop, cvar5: e.cvar5, popMkt: m.pop, edge: e.ev / c.maxLoss, edgeAdj: edge, score });
     }
   }
   ideas.sort((a, b) => b.score - a.score);
