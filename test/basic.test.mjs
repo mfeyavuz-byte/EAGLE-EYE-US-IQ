@@ -177,3 +177,18 @@ test("durum dosyası boyut koruması: yalnız kapanmış kayıtlar budanır", as
   assert.ok(removed > 0 && JSON.stringify(st).length <= 5000 || st.spotBook.every(b => !b.closed));
   assert.equal(st.spotBook.filter(b => !b.closed).length, 10);              // açık kayıtlar korunur
 });
+
+test("canlı kalibrasyon: önselden canlıya doğru kayar, sınırlıdır, motoru günceller", async () => {
+  const { calibrate, PRIOR, K } = await import("../bot/calib.mjs");
+  const { OCFG, setEdges } = await import("../options/engine.mjs");
+  const mk = (n, ex, sig = "AL") => Array.from({ length: n }, () => ({ sig, closed: { ex, td: 21 } }));
+  assert.equal(calibrate(mk(5, 0.05), "d").AL.postM, PRIOR.AL);               // veri az → önsel
+  const c = calibrate(mk(30, -0.02), "d");
+  assert.ok(Math.abs(c.AL.postM - (30 * -0.02 + K * PRIOR.AL) / (30 + K)) < 1e-12);
+  assert.equal(c.AL.warn, true);                                              // 30+ işlemde avantaj yok → uyarı
+  assert.equal(calibrate(mk(500, 0.5), "d").AL.annual, 0.15);                 // üst sınır
+  const before = OCFG.EDGE_AL;
+  setEdges(c);
+  assert.ok(Math.abs(OCFG.EDGE_AL - c.AL.annual) < 1e-12);
+  OCFG.EDGE_AL = before;
+});

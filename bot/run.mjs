@@ -16,7 +16,8 @@ import { isMarketOpen, nyDate, nyParts, fmtTR } from "../data/market.mjs";
 import { riskFreeRate, fetchDaily, optionChain } from "../data/yahoo.mjs";
 import { loadFiles, saveFiles, READ_FAILED, gistEnabled, STATE_FILE, IVHIST_FILE, trimState } from "./state.mjs";
 import { sendTG, fetchCommands } from "./telegram.mjs";
-import { analyzeOptions, OCFG } from "../options/engine.mjs";
+import { analyzeOptions, OCFG, setEdges } from "../options/engine.mjs";
+import { calibrate, fmtCalib } from "./calib.mjs";
 import { fmtAnalysis, fmtDailyIdeas } from "../options/format.mjs";
 import { histOf, snapshot } from "../options/ivhist.mjs";
 import { addIdeas, settle, stats, fmtStats, markBook, fmtClosed } from "../options/book.mjs";
@@ -138,6 +139,7 @@ export function weeklyReport(st, today, paperTxt = null) {
     fmtSpotReport(sc, daysAgo(today, 30), "📈 Son 30 gün"), "",
     fmtStats(stats(st.optBook || []))];
   if (paperTxt) L.push("", paperTxt);
+  if (st.calib) L.push("", fmtCalib(st.calib));
   if (Object.keys(st.watch || {}).length) L.push("", fmtWatch(st));
   if (open.length) {
     L.push("", "Açık opsiyon fikirleri:");
@@ -205,7 +207,9 @@ async function handleCommands(st, ivStore, ctx) {
         `Son tarama: ${ls ? ls.at : "yok"} · analiz edilen ${ls?.analyzed ?? 0}`,
         `Canlı fiyat (Alpaca IEX): ${alpacaEnabled() ? "açık" : "kapalı — Yahoo kullanılıyor"}`,
         `IV geçmişi: ${Object.keys(ivStore).length} sembol · son kayıt ${st.lastIvDay || "yok"}`,
-        `Spot filtre: güven ≥ ${CFG.MIN_CONF} · ADX ≥ ${CFG.MIN_ADX} · hacim ≥ ${usd(CFG.MIN_DVOL / 1e6)}M`,
+        `AL kuralı: momentum en iyi %${Math.round((1 - CFG.MOM_TOP) * 100)} · zirvenin %${Math.round((1 - CFG.HI52_MAX) * 100)}–${Math.round((1 - CFG.HI52_MIN) * 100)} altı · hacim ≥ ${usd(CFG.MIN_DVOL / 1e6)}M`,
+        `Opsiyon: yalnız alım · put ${OCFG.PUTS ? "açık" : "kapalı"} · çıkış ${OCFG.LONG_TP != null ? "+%" + Math.round(OCFG.LONG_TP * 100) : "hedefsiz"} / ${OCFG.LONG_SL != null ? "−%" + Math.round(OCFG.LONG_SL * 100) : "stopsuz"} / ${OCFG.LONG_DTE}g`,
+        "", fmtCalib(st.calib),
       ].join("\n"));
     }
   }
@@ -348,6 +352,10 @@ export async function main() {
   }
   // /sinyaller için filtreyi geçen TÜM sinyaller (kısa alanlarla — Gist boyutu küçük kalsın)
   st.lastScan = { at: fmtTR(), analyzed, signals: signals.map(compactSignal) };
+
+  // --- CANLI KALİBRASYON: kapanmış spot sinyallerinden yön avantajı (günde 1) → opsiyon motoruna ---
+  if (st.calib?.at !== today) st.calib = calibrate(st.spotBook, today);
+  setEdges(st.calib);
 
   // --- Opsiyon fikirleri: günde 2 kez (10:15 ve 14:00 NY; açılış spread'leri geniş olduğu için 10:15) ---
   const slot = mins >= 840 ? "PM" : mins >= 615 ? "AM" : null;

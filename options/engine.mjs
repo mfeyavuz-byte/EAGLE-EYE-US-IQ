@@ -52,6 +52,13 @@ export const OCFG = {
   KELLY_FRAC: +(process.env.OPT_KELLY_FRAC || 0.25), // ¼ Kelly (tahmin hatasına karşı)
 };
 
+// Canlı kalibrasyon (bot/calib.mjs) yön avantajını günceller. Ortam değişkeniyle elle verilmişse ona dokunulmaz.
+export function setEdges(c) {
+  if (!c) return;
+  if (!process.env.OPT_EDGE_AL && isFinite(c.AL?.annual)) OCFG.EDGE_AL = c.AL.annual;
+  if (!process.env.OPT_EDGE_SAT && isFinite(c.SAT?.annual)) OCFG.EDGE_SAT = c.SAT.annual;
+}
+
 // Spot analizinden yön. Seçim kuralını geçen hisse → kalibre fazla getiri (edge, yıllık). Geçmeyen → nötr.
 export function directionOf(a) {
   if (a?.pick) {
