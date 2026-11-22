@@ -84,6 +84,17 @@ export async function fetchChart(sym, interval = "1d", range = "2y") {
   return parseChart(j);
 }
 export const fetchDaily = sym => fetchChart(sym, "1d", "2y");
+// Anlık kotasyon: { price, time (ms), prevClose } | null — vadeli (ES=F, NQ=F) ve çapraz kontrol için.
+// prevClose = son TAMAMLANMIŞ günlük mumun kapanışı (meta.chartPreviousClose pencerenin başıdır, dün değil!).
+// Son mum < 20 saat önce başladıysa o "bugünün" mumudur → bir öncekinin kapanışı alınır.
+export async function quoteNow(sym, now = Date.now()) {
+  const j = await yget(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(toYahoo(sym))}?interval=1d&range=5d&includePrePost=false`).catch(() => null);
+  const m = j?.chart?.result?.[0]?.meta, rows = parseChart(j);
+  if (!m || !(m.regularMarketPrice > 0) || !rows.length) return null;
+  const last = rows.at(-1), todayBar = now - last.ts < 20 * 3600e3;
+  const prev = todayBar ? rows.at(-2) : last;
+  return { price: +m.regularMarketPrice, time: (m.regularMarketTime || 0) * 1e3, prevClose: prev?.close ?? null };
+}
 // Uzun GÜNLÜK geçmiş (range=max günlük vermez, seyreltir) — tarih aralığıyla. fromIso: "1993-01-01"
 export async function fetchHistory(sym, fromIso = "1990-01-01") {
   const p1 = Math.floor(Date.parse(fromIso + "T00:00:00Z") / 1e3), p2 = Math.floor(Date.now() / 1e3);

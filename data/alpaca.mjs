@@ -97,6 +97,13 @@ export async function news(symbol, limit = 5) {
 }
 
 // Piyasa açık mı? (resmî tatilleri bilir). Alpaca yoksa null → çağıran saat hesabına düşer.
+// Bugün işlem günü mü? (resmî tatiller dahil) true/false | null (Alpaca yok/erişilemedi)
+export async function isTradingDay(dateIso) {
+  if (!alpacaEnabled()) return null;
+  const j = await getJSON(`https://paper-api.alpaca.markets/v2/calendar?start=${dateIso}&end=${dateIso}`);
+  return Array.isArray(j) ? j.some(d => d.date === dateIso) : null;
+}
+
 export async function alpacaClock() {
   if (!alpacaEnabled()) return null;
   const j = await getJSON("https://paper-api.alpaca.markets/v2/clock");

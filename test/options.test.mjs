@@ -310,3 +310,30 @@ test("SPY/QQQ düşüş: put ALIMI önerisi → 5g ortalama altında KAPAT; hiss
   const { allowedFor } = await import("../options/engine.mjs");
   assert.deepEqual([...allowedFor(-1, "adil")], ["LONG_PUT"]);
 });
+
+test("sabah: skor, hedef/stop, NÖTR günü, karne ve çapraz kontrol", async () => {
+  const { morningScore, levels, buildMorning, settleMorning } = await import("../bot/morning.mjs");
+  const { crossProblem } = await import("../bot/run.mjs");
+  const up = Array.from({ length: 250 }, (_, i) => 100 + i * 0.2);
+  const calm = [15, 15.2];
+  assert.equal(morningScore(up, calm).score, 0);                                     // sakin, aşırı satım yok → NÖTR
+  const dip = [...up, up.at(-1) * 0.985, up.at(-1) * 0.97];
+  const s = morningScore(dip, [20, 34]);                                             // VIX > 30, +%70, RSI2 düşük, trend yukarı
+  assert.equal(s.score, 3);
+  const lv = levels(100, 16 * Math.sqrt(252) / 100 * 100, "SPY");                     // VIX ≈ 254 → em = %16 (yapay)
+  assert.ok(lv.target > 100 && lv.stop < 100 && Math.abs((lv.target - 100) - (100 - lv.stop)) < 1e-6);
+  const deps = { today: "2026-11-23", vixCloses: async () => [15, 15.2], closesFor: async () => up,
+    futQuote: async () => ({ price: 101, prevClose: 100 }), contractFor: async () => null, headlines: async () => [] };
+  const n = await buildMorning(deps);
+  assert.match(n.text, /NÖTR — işlem önerilmez/); assert.equal(n.calls.length, 0);
+  const c = await buildMorning({ ...deps, vixCloses: async () => [20, 34], closesFor: async () => dip });
+  assert.equal(c.calls.length, 2); assert.match(c.text, /CALL \(gün içi\) · skor 3\/3/); assert.match(c.text, /PUT notu/);
+  const book = c.calls.map(x => ({ ...x }));
+  await settleMorning(book, "2026-11-24", async () => [{ d: "2026-11-23", open: book[0].estOpen, high: book[0].target + 1, low: book[0].estOpen - 0.1, close: book[0].estOpen * 1.01 }]);
+  assert.equal(book[0].res.tHit, true); assert.ok(book[0].res.oc > 0);
+  const now = Date.parse("2026-11-23T16:00:00Z");
+  assert.equal(crossProblem({ price: 600, ts: now - 60e3 }, { price: 600.5 }, now).problem, null);
+  assert.match(crossProblem({ price: 600, ts: now - 20 * 60e3 }, { price: 600 }, now).problem, /bayat/);
+  assert.match(crossProblem({ price: 600, ts: now }, { price: 610 }, now).problem, /farklı/);
+  assert.match(crossProblem(null, { price: 600 }, now).problem, /gelmedi/);
+});

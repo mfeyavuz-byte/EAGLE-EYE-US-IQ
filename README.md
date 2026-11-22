@@ -115,6 +115,18 @@ tahmini yapmaz. Model: `AI_MODEL` repo değişkeni (varsayılan `claude-opus-5-5
 tarafı yedek model. SDK GitHub'da kurulur; kurulum ya da çağrı başarısız olursa bot yorumsuz devam eder. Maliyet: mesaj
 başına bir istek (yaklaşık birkaç sent / gün).
 
+## 🌅 Açılış öncesi mesaj — SPY / QQQ gün içi call (`bot/morning.mjs`)
+Her işlem günü 07:30–09:29 NY arasında (TR ~15:30–17:30) bir kez: VIX seviyesi/değişimi, ES/NQ vadeli (gece hareketi),
+trend (200g), RSI(2), haber başlıkları. Ölçülmüş (`research/premarket.mjs`, açılış→kapanış, 1993–2026, eğitim/test,
+SPY ve QQQ) üç yukarı koşul: **VIX > 30** · **VIX dün ≥ +%10 & trend yukarı** · **RSI(2) < 10 & trend yukarı**.
+- Skor ≥ 1 → **CALL (gün içi)**: geçmiş isabet SPY %55–56 (skor ≥ 2: %53–61), ort. +7…+20 bp; **HEDEF / STOP** = tahmini
+  açılış ± 0.5 × beklenen günlük hareket (VIX/√252; QQQ ×1.25); hiçbiri olmazsa kapanışta çık; ≥ 2 günlük vadeli
+  ~0.5 delta call önerilir.
+- Skor 0 (günlerin ~%84'ü) → **NÖTR**, işlem önerilmez (gün içi yön geçmişte yazı-tura).
+- **Sabah put önerilmez**: açılış öncesi bilgiyle düşüş yönünde ölçülmüş avantaj yok (test döneminde zarar). Gün içi
+  düşüş sinyalinde ETF modülü ayrıca PUT bildirir.
+- `/sabah`: çağrıların karnesi (gün yukarı kapandı mı, hedef/stop görüldü mü). Tatil günleri Alpaca takviminden atlanır.
+
 ## SPY / QQQ kısa vade call ve put (yalnız ALIM — opsiyon satışı yok)
 **Call** (`spot/etfsignal.mjs`): kapanış > 200g ortalama **ve** RSI(2) < 5 (güçlü) / < 10 (normal) → **kapanış 5g
 ortalamanın üstüne çıkınca** ya da en çok 10 işlem günü sonra çık. Ölçüm (`research/etf.mjs`, eğitim < 2014 ≤ test):
@@ -207,6 +219,8 @@ bot/state.mjs          Gist                                      bot/telegram.mj
 
 **Veri sağlığı** her taramada ölçülür (canlı fiyat gelen hisse sayısı, medyan yaş) ve `/durum`'da görünür; seans içinde
 canlı fiyat %50'nin altına düşer ya da 30 dk'dan bayatlarsa Telegram'a **⚠ VERİ UYARISI** gelir (günde 1).
+Ayrıca seans içinde her taramada **SPY çapraz kontrolü**: Alpaca canlı fiyatı 5 dk'dan eskiyse ya da Yahoo fiyatından
+%0.3'ten fazla saparsa aynı uyarı gelir (log'da her turda yazılır: `Çapraz kontrol SPY: …`).
 Tarama ~10 dk'da bir — sinyal, koşul oluştuğu turda (en geç ~10 dk içinde) gelir.
 
 **AL/SAT iyileştirme denemeleri** (o tarihteki S&P 500 üyeleri): kısa vadeli geri çekilmede giriş, RSI filtresi, 50g

@@ -11,9 +11,10 @@ import { scanAll, analyze, spyReturn60, loadUniverse, dailyCache, CFG, setMomCut
 import { logSignals, score, fmtSpotReport, checkExits, fmtExits, tradingDays, HOLD_DAYS } from "./spotbook.mjs";
 import { addWatch, removeWatch, checkWatch, fmtWatch } from "./watch.mjs";
 import { paperEnabled, runPaper, paperSummary } from "./paper.mjs";
-import { liveQuotes, alpacaEnabled, news } from "../data/alpaca.mjs";
+import { liveQuotes, alpacaEnabled, news, isTradingDay } from "../data/alpaca.mjs";
 import { isMarketOpen, isRegularHours, nyDate, nyParts, fmtTR } from "../data/market.mjs";
-import { riskFreeRate, fetchDaily, optionChain } from "../data/yahoo.mjs";
+import { riskFreeRate, fetchDaily, optionChain, quoteNow } from "../data/yahoo.mjs";
+import { buildMorning, settleMorning, fmtMorningBook, MORNING } from "./morning.mjs";
 import { loadFiles, saveFiles, READ_FAILED, gistEnabled, STATE_FILE, IVHIST_FILE, trimState } from "./state.mjs";
 import { sendTG, sendPhoto, fetchCommands } from "./telegram.mjs";
 import { chartUrl, chartsEnabled } from "./chart.mjs";
@@ -126,10 +127,58 @@ const HELP = [
   "/takip SEMBOL — sahip olduğun hisseyi izle (SAT seçimi, 200g kırılımı, zirveden −%8 uyarısı)",
   "/birak SEMBOL — takipten çıkar · /takiplerim — takip listesi",
   "/portfoy — model portföy (Alpaca paper; PAPER_TRADE=1 ise)",
-  "/etf — SPY/QQQ kısa vade call sinyalinin durumu + ETF karnesi",
+  "/etf — SPY/QQQ kısa vade call/put sinyalinin durumu + ETF karnesi",
+  "/sabah — açılış öncesi SPY/QQQ çağrılarının karnesi (mesaj her işlem günü ~08:00–09:30 NY)",
   "/durum — bot durumu",
   "/yardim — bu liste",
 ].join("\n");
+
+// ---------- Açılış öncesi mesaj ----------
+async function completedCloses(sym, today) {
+  const rows = await fetchDaily(sym).catch(() => []);
+  return rows.filter(r => nyDate(new Date(r.ts)) < today).map(r => r.close);
+}
+async function morningStep(st, ctx) {
+  const { mins, wd } = nyParts(), today = nyDate(), force = process.env.MORNING_FORCE === "1";
+  st.morning ||= { book: [], day: null };
+  // Geçmiş çağrıları o günün mumuyla sonuçlandır (günde 1)
+  if (st.morning.settleDay !== today && st.morning.book.some(b => !b.res && b.d < today)) {
+    st.morning.settleDay = today;
+    await settleMorning(st.morning.book, today, async sym => (await fetchDaily(sym).catch(() => []))
+      .map(r => ({ d: nyDate(new Date(r.ts)), open: r.open, high: r.high, low: r.low, close: r.close })));
+  }
+  if (!force && (wd === "Sat" || wd === "Sun" || mins < MORNING.START || mins >= MORNING.END || st.morning.day === today)) return;
+  if (!force && (await isTradingDay(today)) === false) { st.morning.day = today; console.log("Sabah: bugün işlem günü değil."); return; }
+  const r = await ctx.r();
+  const { text, calls } = await buildMorning({
+    today,
+    closesFor: s => completedCloses(s, today),
+    vixCloses: () => completedCloses("^VIX", today),
+    futQuote: s => quoteNow(s),
+    contractFor: async (sym, type) => {
+      const ch = await loadChain(sym, r, { minDte: 2, maxDte: 12, targets: [3, 7] });
+      const ex = (ch?.expiries || []).filter(e => e.dte >= 2).sort((a, b) => a.dte - b.dte)[0];
+      const c = ((type === "P" ? ex?.puts : ex?.calls) || []).filter(o => o.delta != null && o.mid > 0)
+        .sort((a, b) => Math.abs(Math.abs(a.delta) - 0.5) - Math.abs(Math.abs(b.delta) - 0.5))[0];
+      return c ? { K: c.K, exp: new Date(ex.exp * 1e3).toISOString().slice(0, 10), dte: ex.dte, delta: c.delta, mid: c.mid, spreadPct: c.spreadPct } : null;
+    },
+    headlines: async () => (await news("SPY", 4)).map(n => n.headline),
+  });
+  if (await sendTG(text, { buttons: [[{ text: "⚡ SPY/QQQ durumu", data: "/etf" }, { text: "🌅 Sabah karnesi", data: "/sabah" }]] })) {
+    st.morning.day = today;
+    st.morning.book.push(...calls);
+    if (st.morning.book.length > 400) st.morning.book.splice(0, st.morning.book.length - 400);
+  }
+}
+
+// ---------- Canlı veri çapraz kontrolü (seans içinde): Alpaca IEX vs Yahoo, SPY ----------
+export function crossProblem(alp, yq, now = Date.now()) {
+  if (!alp?.price) return { problem: "SPY için Alpaca canlı fiyatı gelmedi", ageMin: null, diffPct: null };
+  const ageMin = Math.round((now - alp.ts) / 60e3);
+  const diffPct = yq?.price ? +((alp.price / yq.price - 1) * 100).toFixed(2) : null;
+  const problem = ageMin > 5 ? `SPY canlı fiyatı ${ageMin} dk bayat` : diffPct != null && Math.abs(diffPct) > 0.3 ? `Alpaca ve Yahoo SPY fiyatı %${diffPct} farklı` : null;
+  return { problem, ageMin, diffPct, alpaca: alp.price, yahoo: yq?.price ?? null };
+}
 
 // ---------- Veri sağlığı ----------
 // liveMap: { SYM: {price, ts} } · of: taranan hisse sayısı. Sorun: Alpaca açıkken canlı fiyat < %50 ya da
@@ -162,6 +211,7 @@ export function weeklyReport(st, today, paperTxt = null) {
   if (paperTxt) L.push("", paperTxt);
   if (st.calib) L.push("", fmtCalib(st.calib));
   if (st.etf) L.push("", fmtEtfBook(st));
+  if (st.morning?.book?.length) L.push("", fmtMorningBook(st.morning.book));
   if (Object.keys(st.watch || {}).length) L.push("", fmtWatch(st));
   if (open.length) {
     L.push("", "Açık opsiyon fikirleri:");
@@ -228,6 +278,8 @@ async function handleCommands(st, ivStore, ctx) {
       await sendTG(removeWatch(st, sym) ? `${sym} takipten çıkarıldı.` : `${sym || "?"} takipte değil.`);
     } else if (cmd === "/takiplerim") {
       await sendTG(fmtWatch(st));
+    } else if (cmd === "/sabah") {
+      await sendTG(fmtMorningBook(st.morning?.book) + (st.morning?.day ? `\nSon sabah mesajı: ${st.morning.day}` : ""));
     } else if (cmd === "/etf") {
       const lines = [];
       for (const s of ETFS_FAST) lines.push(fmtEtfState(s, etfState(await etfCloses(s))));
@@ -328,6 +380,9 @@ export async function main() {
 
   await handleCommands(st, ivStore, ctx);
 
+  // --- AÇILIŞ ÖNCESİ (07:30–09:29 NY, işlem günü, günde 1): SPY/QQQ gün içi eğilim + hedef/stop ---
+  await morningStep(st, ctx).catch(e => console.error("[Sabah]", e?.message || e));
+
   const open = await isMarketOpen();
   if (!open && !FORCE) {
     console.log("⏰ ABD piyasası kapalı — tarama yok.");
@@ -346,6 +401,13 @@ export async function main() {
 
   // --- VERİ SAĞLIĞI: canlı fiyat kaç hissede geldi, ne kadar taze? Seans içinde sorun varsa günde 1 uyarı ---
   st.data = dataHealth(liveMap, scanSyms.length, open);
+  // Seans içinde SPY çapraz kontrolü: Alpaca canlı fiyatı taze mi, Yahoo ile uyumlu mu?
+  if (alpacaEnabled() && isRegularHours()) {
+    const [alp, yq] = await Promise.all([liveQuotes(["SPY"]).then(m => m.SPY).catch(() => null), quoteNow("SPY").catch(() => null)]);
+    st.data.cross = crossProblem(alp, yq);
+    if (st.data.cross.problem && !st.data.problem) st.data.problem = st.data.cross.problem;
+    console.log(`Çapraz kontrol SPY: Alpaca ${st.data.cross.alpaca ?? "—"} (${st.data.cross.ageMin ?? "—"} dk) · Yahoo ${st.data.cross.yahoo ?? "—"} · fark %${st.data.cross.diffPct ?? "—"}`);
+  }
   console.log(`Veri: ${st.data.src} · canlı ${st.data.live}/${st.data.of} · medyan yaş ${st.data.medAgeMin ?? "—"} dk`);
   if (st.data.problem && st.dataWarnDay !== today && isRegularHours()) {
     st.dataWarnDay = today;

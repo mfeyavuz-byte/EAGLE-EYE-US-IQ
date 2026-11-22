@@ -6,6 +6,8 @@ name: ABD BOT — Spot + Opsiyon
 # Piyasa kapalıysa run.mjs 3 koduyla çıkar → döngü biter; sonraki cron yeniden dener.
 on:
   schedule:
+    - cron: "45 12 * * 1-5"   # açılış öncesi (yaz: 08:45 NY)
+    - cron: "15 13 * * 1-5"   # açılış öncesi (kış: 08:15 NY)
     - cron: "35 13 * * 1-5"
     - cron: "0 14 * * 1-5"
     - cron: "35 14 * * 1-5"
