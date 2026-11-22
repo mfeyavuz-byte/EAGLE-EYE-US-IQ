@@ -283,3 +283,29 @@ test("opsiyon model portföyleri: kuyruk, giriş, −%50 stop, vade çıkışı,
   const s2 = await O.markAndExit(om, "2026-11-29", async () => ({ mid: 5.2, bid: 5.1, ask: 5.3 }), Date.parse("2026-11-29T15:00:00Z"));
   assert.equal(s2.length, 1); assert.match(s2[0].why, /vade yaklaştı/);
 });
+
+test("değer (ucuz hisse) portföyü: kalite kapıları, veri hatası, sektör sınırı, dengeleme", async () => {
+  const V = await import("../bot/value.mjs");
+  const M = await import("../bot/model.mjs");
+  const good = { margin: 0.15, roe: 0.2, de: 50, fcf: 1e9, evEbitda: 8 };
+  const row = (sym, pe, sec, extra = {}) => ({ sym, sec, price: 50, pe, fpe: pe * 0.9, pb: 2, eps: 3, mcap: 2e10, q: { ...good }, hi52: 0.8, pick: null, ...extra });
+  const rows = [row("A", 8, "Enerji"), row("B", 9, "Enerji"), row("C", 10, "Enerji"), row("D", 12, "Sağlık"), row("E", 30, "Teknoloji"),
+    row("LOSS", 5, "Sanayi", { eps: -1 }), row("DEBT", 5, "Sanayi", { q: { ...good, de: 400 } }), row("KNIFE", 5, "Sanayi", { hi52: 0.4 }),
+    row("SAT", 5, "Sanayi", { pick: "SAT" }), row("BADPB", 11, "Finans", { pb: 0.001 })];
+  const ranked = V.rankValue(rows);
+  assert.ok(!ranked.some(r => ["LOSS", "DEBT", "KNIFE", "SAT"].includes(r.sym)));          // kalite kapıları
+  assert.equal(ranked[0].sym, "A");                                                        // en ucuz
+  assert.ok(!ranked.find(r => r.sym === "BADPB").pct.by);                                  // PD/DD 0.001 yok sayılır
+  const picks = V.pickValue(ranked, 10, 2);
+  assert.equal(picks.filter(p => p.sec === "Enerji").length, 2);                           // sektör başına 2
+  const v = V.initValue("2026-11-23", 600);
+  const r1 = V.rebalanceValue(v, "2026-11-23", picks.map(p => ({ ...p, price: 50 })), () => 50);
+  assert.equal(r1.bought.length, picks.length);
+  V.snapValue(v, "2026-11-23", () => 50, 600);
+  const r2 = V.rebalanceValue(v, "2026-12-01", picks.slice(1).map(p => ({ ...p, price: 55 })), () => 55);
+  assert.deepEqual(r2.sold.map(s => s.sym), [picks[0].sym]);                               // listeden düşen satılır
+  V.snapValue(v, "2026-12-01", () => 55, 612);
+  const st = M.periodStats(v, "2026-11-23");
+  assert.ok(st.ret > 0.09 && Math.abs(st.spyRet - 0.02) < 1e-9);
+  assert.match(V.fmtValue(v, st, "T"), /getiri \+/);
+});

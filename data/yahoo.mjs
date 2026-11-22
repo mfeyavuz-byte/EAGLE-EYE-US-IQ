@@ -84,6 +84,30 @@ export async function fetchChart(sym, interval = "1d", range = "2y") {
   return parseChart(j);
 }
 export const fetchDaily = sym => fetchChart(sym, "1d", "2y");
+
+// DEĞERLEME VERİSİ — toplu kotasyon (≤ 40 sembol/istek): F/K (izleyen, ileri), PD/DD, piyasa değeri, sektör yok.
+// Dönüş: { SYM: { price, pe, fpe, pb, eps, mcap } }
+export async function valuationQuotes(symbols) {
+  const out = {};
+  for (let i = 0; i < symbols.length; i += 40) {
+    const chunk = symbols.slice(i, i + 40).map(toYahoo);
+    const j = await yget(`https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(chunk.join(","))}`, { auth: true }).catch(() => null);
+    for (const q of j?.quoteResponse?.result || []) {
+      const sym = String(q.symbol).replace(/-/g, ".");
+      out[sym] = { price: q.regularMarketPrice ?? null, pe: q.trailingPE ?? null, fpe: q.forwardPE ?? null, pb: q.priceToBook ?? null,
+        eps: q.epsTrailingTwelveMonths ?? null, mcap: q.marketCap ?? null };
+    }
+  }
+  return out;
+}
+// Kârlılık/borç (tek sembol): { margin, roe, de, fcf, evEbitda, rev } | null
+export async function qualityStats(sym) {
+  const j = await yget(`https://query1.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(toYahoo(sym))}?modules=financialData,defaultKeyStatistics`, { auth: true }).catch(() => null);
+  const r = j?.quoteSummary?.result?.[0];
+  if (!r) return null;
+  const f = r.financialData || {}, k = r.defaultKeyStatistics || {}, v = x => (x && typeof x === "object" ? x.raw : x) ?? null;
+  return { margin: v(f.profitMargins), roe: v(f.returnOnEquity), de: v(f.debtToEquity), fcf: v(f.freeCashflow), evEbitda: v(k.enterpriseToEbitda), rev: v(f.revenueGrowth) };
+}
 // Anlık kotasyon: { price, time (ms), prevClose } | null — vadeli (ES=F, NQ=F) ve çapraz kontrol için.
 // prevClose = son TAMAMLANMIŞ günlük mumun kapanışı (meta.chartPreviousClose pencerenin başıdır, dün değil!).
 // Son mum < 20 saat önce başladıysa o "bugünün" mumudur → bir öncekinin kapanışı alınır.

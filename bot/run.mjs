@@ -13,7 +13,7 @@ import { addWatch, removeWatch, checkWatch, fmtWatch } from "./watch.mjs";
 import { paperEnabled, runPaper, paperSummary } from "./paper.mjs";
 import { liveQuotes, alpacaEnabled, news, isTradingDay } from "../data/alpaca.mjs";
 import { isMarketOpen, isRegularHours, nyDate, nyParts, fmtTR } from "../data/market.mjs";
-import { riskFreeRate, fetchDaily, fetchHistory, optionChain, quoteNow } from "../data/yahoo.mjs";
+import { riskFreeRate, fetchDaily, fetchHistory, optionChain, quoteNow, valuationQuotes, qualityStats } from "../data/yahoo.mjs";
 import { loadFG, fgLabel } from "../spot/feargreed.mjs";
 import { buildMorning, settleMorning, fmtMorningBook, MORNING } from "./morning.mjs";
 import { loadFiles, saveFiles, READ_FAILED, gistEnabled, STATE_FILE, IVHIST_FILE, trimState } from "./state.mjs";
@@ -22,7 +22,8 @@ import { chartUrl, chartsEnabled } from "./chart.mjs";
 import { aiComments, aiItem, AI_MODEL } from "./ai.mjs";
 import { analyzeOptions, OCFG, setEdges } from "../options/engine.mjs";
 import { calibrate, fmtCalib } from "./calib.mjs";
-import { initModel, stepModel, equity, fmtModel, dueReports, prevMonthEnd, prevQuarterEnd, shiftDays, MCFG } from "./model.mjs";
+import { initModel, stepModel, equity, fmtModel, dueReports, prevMonthEnd, prevQuarterEnd, shiftDays, MCFG, periodStats } from "./model.mjs";
+import { rankValue, pickValue, initValue, rebalanceValue, snapValue, fmtValueTrades, fmtValue, VCFG } from "./value.mjs";
 import { initOptModel, queue, enterPending, markAndExit, fmtOptModel, fmtOptTrades } from "./optmodel.mjs";
 import { runEtf, fmtEtfBook, fmtEtfState, ETF_OPT } from "./etf.mjs";
 import { etfState, ETFS_FAST } from "../spot/etfsignal.mjs";
@@ -135,6 +136,33 @@ const HELP = [
   "/durum — bot durumu",
   "/yardim — bu liste",
 ].join("\n");
+
+// ---------- Değer (ucuz hisse) portföyü ----------
+async function valueStep(st, today, mins, all, spyPx) {
+  const px = new Map(all.map(a => [a.sym, a.price])), priceOf = s => px.get(s);
+  st.vmodel ||= initValue(today, spyPx);
+  const v = st.vmodel, due = !v.lastRebal || (v.lastRebal.slice(0, 7) !== today.slice(0, 7) && mins >= 600) || process.env.VALUE_FORCE === "1";
+  if (due) {
+    const byS = new Map(all.map(a => [a.sym, a]));
+    const cands = UNI.symbols.filter(s => { const m = UNI.meta?.[s]; return byS.has(s) && (m?.idx === "SP500" || (m?.mcapB ?? 0) * 1e9 >= VCFG.MIN_MCAP_NQ); });
+    const vq = await valuationQuotes(cands);
+    // Ön eleme (yalnız değerleme): kârlı ve fiyatı ≥ $10 olanlar içinde kazanç/defter verimine göre ilk 60 → kalite verisi
+    const pre = cands.map(s => ({ sym: s, ...vq[s] })).filter(r => r.price >= 10 && r.eps > 0)
+      .map(r => ({ ...r, pre: (r.pe > 0 ? 1 / r.pe : 0) + (r.fpe > 0 ? 1 / r.fpe : 0) + (r.pb >= 0.1 ? 0.2 / r.pb : 0) }))
+      .sort((a, b) => b.pre - a.pre).slice(0, 60);
+    const rows = [];
+    for (const r of pre) {
+      const a = byS.get(r.sym);
+      rows.push({ ...r, sec: UNI.meta?.[r.sym]?.sec, q: await qualityStats(r.sym).catch(() => null), hi52: a?.hi52 ?? null, pick: a?.pick ?? null, price: a?.price ?? r.price });
+    }
+    const picks = pickValue(rankValue(rows));
+    if (picks.length >= 5) {                                       // veri eksikse dengeleme ertelenir (yanlış liste kurulmaz)
+      const { bought, sold } = rebalanceValue(v, today, picks, priceOf);
+      await sendTG(fmtValueTrades(bought, sold) + `\nAday ${cands.length} · kalite incelenen ${rows.length} · seçilen ${picks.length}`);
+    } else console.error(`[Değer] yetersiz veri (${picks.length} seçim) — dengeleme ertelendi`);
+  }
+  snapValue(v, today, priceOf, spyPx);
+}
 
 // ---------- Korku & Açgözlülük (CNN yöntemiyle kendi hesabımız) ----------
 // Günde en çok 2 kez: ilk ihtiyaçta (sabah: dünkü kapanışlarla) ve 15:30 NY sonrası (kapanışa yakın değerlerle).
@@ -314,7 +342,7 @@ async function handleCommands(st, ivStore, ctx) {
       const today = nyDate();
       const txt = st.model ? fmtModel(st.model, "💼 MODEL PORTFÖY — son 7 gün", shiftDays(today, -7)) : "Model portföy ilk tarama gününde başlar.";
       const paper = await paperSummary(st);
-      await sendTG(txt + "\n\n" + fmtOptModel(st.om, shiftDays(today, -7)) + (paper ? "\n\n" + paper : ""));
+      await sendTG(txt + "\n\n" + fmtOptModel(st.om, shiftDays(today, -7)) + "\n\n" + fmtValue(st.vmodel, st.vmodel && periodStats(st.vmodel, shiftDays(today, -7)), "💎 DEĞER (UCUZ HİSSE) PORTFÖYÜ — son 7 gün") + (paper ? "\n\n" + paper : ""));
     } else if (cmd === "/spotkarne") {
       const today = nyDate();
       await sendTG(fmtSpotReport(spotScored(st), daysAgo(today, 30), "📈 SPOT SİNYAL KARNESİ — son 30 gün") +
@@ -504,14 +532,17 @@ export async function main() {
       const pxOf = s => px.get(s);
       if (out.includes("monthly") || process.env.MODEL_REPORT_FORCE === "1") {
         const end = prevMonthEnd(today);
-        if (await sendTG(fmtModel(st.model, `📆 MODEL PORTFÖY — AYLIK RAPOR (${end.slice(0, 7)})`, prevMonthEnd(end), pxOf, end) + "\n\n" + fmtOptModel(st.om, prevMonthEnd(end), end))) st.model.lastMonthly = ym;
+        if (await sendTG(fmtModel(st.model, `📆 MODEL PORTFÖY — AYLIK RAPOR (${end.slice(0, 7)})`, prevMonthEnd(end), pxOf, end) + "\n\n" + fmtOptModel(st.om, prevMonthEnd(end), end) + "\n\n" + fmtValue(st.vmodel, st.vmodel && periodStats(st.vmodel, prevMonthEnd(end), end), "💎 DEĞER (UCUZ HİSSE) PORTFÖYÜ — aylık"))) st.model.lastMonthly = ym;
       }
       if (out.includes("quarterly") || process.env.MODEL_REPORT_FORCE === "1") {
         const end = prevQuarterEnd(today);
-        if (await sendTG(fmtModel(st.model, `🗓 MODEL PORTFÖY — 3 AYLIK RAPOR (${end.slice(0, 7)} sonu)`, prevQuarterEnd(end), pxOf, end) + "\n\n" + fmtOptModel(st.om, prevQuarterEnd(end), end))) st.model.lastQuarterly = q;
+        if (await sendTG(fmtModel(st.model, `🗓 MODEL PORTFÖY — 3 AYLIK RAPOR (${end.slice(0, 7)} sonu)`, prevQuarterEnd(end), pxOf, end) + "\n\n" + fmtOptModel(st.om, prevQuarterEnd(end), end) + "\n\n" + fmtValue(st.vmodel, st.vmodel && periodStats(st.vmodel, prevQuarterEnd(end), end), "💎 DEĞER (UCUZ HİSSE) PORTFÖYÜ — 3 aylık"))) st.model.lastQuarterly = q;
       }
     }
   }
+
+  // --- DEĞER (UCUZ HİSSE) PORTFÖYÜ: yeni ayın ilk işlem günü (10:00 NY sonrası) dengeleme, her turda değerleme ---
+  if (full) await valueStep(st, today, mins, all, spyPx).catch(e => console.error("[Değer]", e?.message || e));
 
   // --- ALPACA PAPER (isteğe bağlı, PAPER_TRADE=1): aynı AL'leri gerçek dolumla sanal hesapta uygula ---
   if (paperEnabled()) {
@@ -590,7 +621,7 @@ export async function main() {
     await sendTG(weeklyReport(st, today, await paperSummary(st)));
     if (st.model) {
       const px = new Map(all.map(a => [a.sym, a.price]));
-      await sendTG(fmtModel(st.model, `📊 MODEL PORTFÖY — HAFTALIK RAPOR (${today})`, shiftDays(today, -7), s => px.get(s)) + "\n\n" + fmtOptModel(st.om, shiftDays(today, -7)));
+      await sendTG(fmtModel(st.model, `📊 MODEL PORTFÖY — HAFTALIK RAPOR (${today})`, shiftDays(today, -7), s => px.get(s)) + "\n\n" + fmtOptModel(st.om, shiftDays(today, -7)) + "\n\n" + fmtValue(st.vmodel, st.vmodel && periodStats(st.vmodel, shiftDays(today, -7)), "💎 DEĞER (UCUZ HİSSE) PORTFÖYÜ — haftalık"));
     }
   }
 
