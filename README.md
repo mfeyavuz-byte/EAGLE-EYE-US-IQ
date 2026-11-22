@@ -54,16 +54,31 @@ Karar zinciri:
    - Ayrıca en kötü %5 senaryo ortalaması (CVaR) ve net Greek'ler.
 6. **Eleme**: EV ≤ 0 veya (yön payı indirimli) EV/maks zarar < %3 → elenir; kredili yapılarda kâr olasılığı ≥ %55, borçlularda ≥ %30;
    bacak başına OI ≥ 100 ve spread ≤ %12. Sıralama: avantaj − spread maliyeti + olasılık − vade sapması.
-7. Her fikirde **boyut** (hesabın %2 riski) ve **yönetim kuralı** (kredili: %50 kârda kapat, 21 gün kala çık, 2× kredi zararda dur).
+7. Her fikirde **boyut** (hesabın %2 riski) ve **yönetim kuralı** — dolar tutarlarıyla:
+
+| Yapı | Kâr al | Zarar durdur | Süre |
+|---|---|---|---|
+| Kredili (bull put, bear call, condor) | maks kârın %50'si | 2× kredi zarar (maks zarardan küçükse) · kısa strike kırılırsa | vadeye 21 gün |
+| Borçlu spread | maks kârın %75'i | ödenen primin %50'si | vadeye 10 gün |
+| Long call / put | +%100 | primin %50'si | vadeye 21 gün |
 
 8. **Yoğunlaşma koruması** (günlük liste): aynı stratejiden ≤ 3, aynı sektörden ≤ 2, aynı yönden ≤ 4 fikir.
    Alternatif yoksa daha az fikir gider — 6 kopya bahis gönderilmez.
 
 Yalnızca **riski sınırlı** yapılar önerilir (çıplak opsiyon satışı yok).
 
-**Karne (`/karne`)**: Gönderilen her fikir kaydedilir; vade geçince dayanağın vade günü kapanışıyla sonuçlandırılır.
-Gerçekleşen kazanma oranı modelin tahmini POP'uyla, gerçekleşen K/Z tahmini EV'yle karşılaştırılır. Model kendini
-abartıyorsa karne bunu gösterir → `OPT_TILT` / ağırlıklar düşürülür. **Bu bir tahmin motorudur; karne onun ölçüsüdür.**
+**Karne (`/karne`)**: Gönderilen her fikir kaydedilir ve iki ayrı şekilde ölçülür:
+- **Gerçekçi (yönetilmiş):** Açık fikirler her gün 15:00 NY sonrası bacakların **canlı alış/satış** fiyatlarıyla
+  değerlenir (kapatma fiyatı orta ∓ %30 spread — bizim aleyhimize). Yukarıdaki yönetim kurallarından biri tetiklenince
+  fikir kapanır ve Telegram'a **"📕 OPSİYON FİKRİ KAPAT"** mesajı gelir. Karne: kazanma oranı, toplam K/Z, ortalama
+  süre, kapanış nedenleri, yönetimin katkısı (kurallarla vs vadeye kadar tutsan) ve açık fikirlerin güncel K/Z'si.
+- **Model kalibrasyonu:** Aynı fikir vadeye kadar tutulmuş gibi dayanağın vade kapanışıyla sonuçlandırılır.
+  Gerçekleşen kazanma oranı tahmini POP'la, K/Z tahmini EV'yle karşılaştırılır. Model kendini abartıyorsa →
+  `OPT_TILT` / `OPT_DIR_TRUST` / ağırlıklar düşürülür. **Bu bir tahmin motorudur; karne onun ölçüsüdür.**
+
+Değerleme kaynağı Yahoo'nun canlı zinciridir (gerçek alış/satış). Alpaca'nın ücretsiz opsiyon verisi "indicative"
+(türetilmiş kotasyon, 15 dk gecikmeli işlem) olduğu için değerlemede kullanılmaz; geçmiş opsiyon mumları
+(Şubat 2024'ten beri) ileride geriye dönük opsiyon testinde kullanılacak.
 
 **IV geçmişi**: Ücretsiz kaynak IV geçmişi vermez; bot her gün 15:00 NY sonrası en likit 250 hisse + SPY/QQQ/IWM için
 IV30 kaydeder (Gist, `abd_ivhist.json`). ~20 işlem gününden sonra IV rank devreye girer; o zamana kadar IV/HV kullanılır.

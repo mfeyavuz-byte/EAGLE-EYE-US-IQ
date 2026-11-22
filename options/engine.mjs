@@ -121,19 +121,33 @@ export async function analyzeOptions(sym, { spot, daily, r, hist = null, top = 3
   picked.forEach(i => {
     i.contracts = Math.floor(OCFG.ACCOUNT * OCFG.RISK / i.maxLoss);
     i.minAccount = Math.ceil(i.maxLoss / OCFG.RISK / 1000) * 1000;   // %2 kuralıyla 1 kontrat için gereken hesap
+    i.rules = rulesFor(i);
     i.manage = manageRules(i);
   });
   return { ...base, ideas: picked, considered: ideas.length, note: picked.length ? null : "Filtreleri geçen pozitif beklentili yapı bulunamadı (BEKLE)." };
 }
 
-export function manageRules(i) {
+// Yönetim kuralları VERİ olarak tanımlıdır: mesajdaki metin ve karnedeki günlük simülasyon aynı kaynaktan gelir.
+// tp: bu K/Z'ye ($/kontrat) ulaşınca kâr al · sl: bu K/Z'nin altına inince çık (negatif) · dte: vadeye bu kadar gün
+// kalınca kapat · breakShort: dayanak kısa strike'ı aşarsa çık (kredili yapılar).
+export function rulesFor(i) {
+  const prem = Math.abs(i.debit) * 100;
   if (i.kind === "credit") {
-    const stop = Math.round(-i.debit * 100 * 2);
-    const stopTxt = stop < i.maxLoss * 0.9 ? `zarar $${stop}'a (2× kredi) ulaşırsa ya da kısa strike kırılırsa çık` : "kısa strike kırılırsa çık (maks zarar zaten sınırlı)";
-    return `Maks kârın %50'sinde kapat · vadeye 21 gün kalınca kapat · ${stopTxt}`;
+    const stop = 2 * prem;
+    return { tp: Math.round(0.5 * i.maxProfit), sl: stop < i.maxLoss * 0.9 ? -Math.round(stop) : null, dte: 21, breakShort: true };
   }
-  if (i.code === "LONG_CALL" || i.code === "LONG_PUT") return "+%100'de yarısını al · prim %50 erirse çık · vadeye 21 gün kalınca kapat (zaman erimesi hızlanır)";
-  return "Maks kârın %75'inde kapat · ödenen primin %50'si giderse çık · vadeye 10 gün kalınca kapat";
+  if (i.code === "LONG_CALL" || i.code === "LONG_PUT") return { tp: Math.round(prem), sl: -Math.round(0.5 * prem), dte: 21, breakShort: false };
+  return { tp: Math.round(0.75 * i.maxProfit), sl: -Math.round(0.5 * prem), dte: 10, breakShort: false };
+}
+
+export function manageRules(i) {
+  const r = i.rules || rulesFor(i);
+  if (i.kind === "credit") {
+    const stopTxt = r.sl != null ? `zarar $${-r.sl}'a (2× kredi) ulaşırsa ya da kısa strike kırılırsa çık` : "kısa strike kırılırsa çık (maks zarar zaten sınırlı)";
+    return `Maks kârın %50'sinde (+$${r.tp}) kapat · vadeye ${r.dte} gün kalınca kapat · ${stopTxt}`;
+  }
+  if (i.code === "LONG_CALL" || i.code === "LONG_PUT") return `+%100'de (+$${r.tp}) kapat · prim %50 erirse (−$${-r.sl}) çık · vadeye ${r.dte} gün kalınca kapat (zaman erimesi hızlanır)`;
+  return `Maks kârın %75'inde (+$${r.tp}) kapat · ödenen primin %50'si giderse (−$${-r.sl}) çık · vadeye ${r.dte} gün kalınca kapat`;
 }
 
 export { STRAT };

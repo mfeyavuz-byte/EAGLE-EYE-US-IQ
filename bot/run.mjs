@@ -6,16 +6,17 @@
 // Ortam: TG_TOKEN TG_CHAT GH_GIST_TOKEN GIST_ID [ALPACA_KEY_ID ALPACA_SECRET_KEY]
 //        DRY_RUN=1 (Telegram'a gönderme) · FORCE=1 (piyasa kapalıyken de tara) · SYMBOLS=AAPL,MSFT (alt küme)
 //        OPT_FORCE=1 (opsiyon fikirlerini saat beklemeden üret) · IV_FORCE=1 (IV geçmişi kaydını zorla)
+//        MARK_FORCE=1 (karnedeki açık fikirleri saat beklemeden değerle)
 import { scanAll, analyze, spyReturn60, loadUniverse, dailyCache, CFG } from "../spot/scan.mjs";
 import { liveQuotes, alpacaEnabled } from "../data/alpaca.mjs";
 import { isMarketOpen, nyDate, nyParts, fmtTR } from "../data/market.mjs";
-import { riskFreeRate, fetchDaily } from "../data/yahoo.mjs";
+import { riskFreeRate, fetchDaily, optionChain } from "../data/yahoo.mjs";
 import { loadFiles, saveFiles, READ_FAILED, gistEnabled, STATE_FILE, IVHIST_FILE } from "./state.mjs";
 import { sendTG, fetchCommands } from "./telegram.mjs";
 import { analyzeOptions } from "../options/engine.mjs";
 import { fmtAnalysis, fmtDailyIdeas } from "../options/format.mjs";
 import { histOf, snapshot } from "../options/ivhist.mjs";
-import { addIdeas, settle, stats, fmtStats } from "../options/book.mjs";
+import { addIdeas, settle, stats, fmtStats, markBook, fmtClosed } from "../options/book.mjs";
 import { pathToFileURL } from "node:url";
 
 const UNI = loadUniverse();
@@ -246,9 +247,23 @@ export async function main() {
       return bar ? bar.close : null;
     });
     if (done.length) {
-      const lines = done.map(b => `${b.pnl >= 0 ? "✅" : "❌"} ${b.sym} ${b.code} (${b.exp}) → kapanış $${b.close} · K/Z ${b.pnl >= 0 ? "+" : ""}$${b.pnl} (tahmini EV +$${b.ev}, POP %${Math.round(b.pop * 100)})`);
-      await sendTG("📒 Vadesi dolan opsiyon fikirleri\n\n" + lines.join("\n") + "\n\n" + fmtStats(stats(st.optBook)));
+      const lines = done.map(b => `${b.pnl >= 0 ? "✅" : "❌"} ${b.sym} ${b.code} (${b.exp}) → vade kapanışı $${b.close} · vadeye kadar tutulsaydı K/Z ${b.pnl >= 0 ? "+" : ""}$${b.pnl}` +
+        (b.closed && b.closed.reason !== "vade" ? ` (kurallarla ${b.closed.d} kapandı: ${b.closed.pnl >= 0 ? "+" : ""}$${b.closed.pnl})` : "") +
+        ` · tahmini EV +$${b.ev}, POP %${Math.round(b.pop * 100)}`);
+      await sendTG("📒 Vadesi dolan opsiyon fikirleri (model kalibrasyonu)\n\n" + lines.join("\n") + "\n\n" + fmtStats(stats(st.optBook)));
     }
+  }
+
+  // --- Karne: açık fikirleri canlı fiyatla değerle, yönetim kurallarını uygula (günde 1, 15:00 NY sonrası) ---
+  if (st.optBook?.length && ((mins >= 900 && st.lastMarkDay !== today) || process.env.MARK_FORCE === "1")) {
+    st.lastMarkDay = today;
+    const { marked, closed } = await markBook(st.optBook, today, async (sym, expTs) => {
+      const c = await optionChain(sym, expTs);
+      return c && c.exp === expTs ? { S: c.quote.price, calls: c.calls, puts: c.puts } : null;
+    });
+    console.log(`Karne değerleme: ${marked} açık fikir · ${closed.length} kural tetiklendi`);
+    if (closed.length) await sendTG("📕 OPSİYON FİKRİ KAPAT — yönetim kuralı tetiklendi\n\n" + closed.map(fmtClosed).join("\n") +
+      "\n\nℹ Fiyat: bugünkü canlı alış/satış (orta ± %30 spread). Kendi pozisyonunu canlı fiyatla kontrol et.\n\n" + fmtStats(stats(st.optBook)));
   }
 
   // --- IV geçmişi: günde 1 (15:00 NY sonrası) → IV rank zamanla oluşur ---

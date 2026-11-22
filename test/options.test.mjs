@@ -159,6 +159,58 @@ test("opsiyon karnesi: kayıt, tekrar engeli, vade sonu sonuçlandırma, istatis
   assert.equal(s.n, 1); assert.equal(s.winRate, 0); assert.equal(s.pnl, -150); assert.equal(s.predEv, 30);
 });
 
+test("yönetim kuralları: mesaj ve simülasyon aynı kaynaktan", async () => {
+  const { rulesFor, manageRules } = await import("../options/engine.mjs");
+  const credit = { kind: "credit", code: "BULL_PUT", debit: -1.5, maxProfit: 150, maxLoss: 350 };
+  assert.deepEqual(rulesFor(credit), { tp: 75, sl: -300, dte: 21, breakShort: true });
+  assert.equal(rulesFor({ ...credit, debit: -2, maxProfit: 200, maxLoss: 300 }).sl, null);   // 2× kredi ≥ maks zarar → stop yok
+  assert.deepEqual(rulesFor({ kind: "debit", code: "BEAR_PUT", debit: 4, maxProfit: 600, maxLoss: 400 }), { tp: 450, sl: -200, dte: 10, breakShort: false });
+  assert.deepEqual(rulesFor({ kind: "debit", code: "LONG_CALL", debit: 3, maxProfit: Infinity, maxLoss: 300 }), { tp: 300, sl: -150, dte: 21, breakShort: false });
+  assert.match(manageRules(credit), /\+\$75/);
+});
+
+test("gerçekçi karne: canlı kotasyonla değerleme, kural tetikleme, iki ayrı istatistik", async () => {
+  const { addIdeas, markBook, exitValue, checkRules, settle, stats, fmtStats } = await import("../options/book.mjs");
+  const legs = [{ type: "P", K: 100, side: -1, sym: "X261218P00100000", bid: 2.9, ask: 3.1 }, { type: "P", K: 95, side: 1, sym: "X261218P00095000", bid: 1.4, ask: 1.6 }];
+  const idea = { code: "BULL_PUT", kind: "credit", expDate: "2026-12-18", debit: -1.5, ev: 30, pop: 0.7, popMkt: 0.62, maxLoss: 350, maxProfit: 150,
+    legs, rules: { tp: 75, sl: -300, dte: 21, breakShort: true } };
+  const book = [];
+  addIdeas(book, [{ sym: "X", idea }], "2026-11-02");
+  assert.equal(book[0].legs[0].occ, "X261218P00100000");
+  const chain = (S, pS, pL) => ({ S, calls: [], puts: [
+    { strike: 100, bid: pS - 0.05, ask: pS + 0.05, sym: "X261218P00100000" }, { strike: 95, bid: pL - 0.05, ask: pL + 0.05, sym: "X261218P00095000" }] });
+  // kapatma değeri: −(orta + 0.3·spread) + (orta − 0.3·spread)
+  near(exitValue(book[0].legs, chain(104, 1.0, 0.4)), -(1.0 + 0.03) + (0.4 - 0.03), 1e-9);
+  // Gün 1: kredi 1.50, kapatma maliyeti ~0.66 → K/Z ≈ +84 ≥ hedef 75 → kâr hedefi
+  const r1 = await markBook(book, "2026-11-10", async () => chain(104, 1.0, 0.4));
+  assert.equal(r1.marked, 1); assert.equal(r1.closed.length, 1);
+  assert.equal(book[0].closed.reason, "kâr hedefi"); assert.equal(book[0].closed.days, 8);
+  assert.ok(book[0].closed.pnl >= 75);
+  const r2 = await markBook(book, "2026-11-11", async () => chain(104, 1.0, 0.4));
+  assert.equal(r2.marked, 0);                                                    // kapananlar tekrar değerlenmez
+  // kural öncelikleri
+  const b = book[0];
+  assert.equal(checkRules(b, -320, 104, 30), "zarar durdur");
+  assert.equal(checkRules(b, 10, 99, 30), "kısa strike kırıldı");
+  assert.equal(checkRules(b, 10, 104, 21), "süre");
+  assert.equal(checkRules(b, 10, 104, 30), null);
+  // vade sonucu ayrı tutulur (kalibrasyon), gerçekçi sonuç değişmez
+  await settle(book, "2026-12-19", async () => 97);
+  const s = stats(book);
+  assert.equal(s.n, 1); assert.equal(s.pnl, -150);                              // vadeye kadar tutsaydı
+  assert.equal(s.real.n, 1); assert.ok(s.real.pnl >= 75);                        // kurallarla
+  assert.deepEqual(s.real.reasons, { "kâr hedefi": 1 });
+  assert.match(fmtStats(s), /GERÇEKÇİ[\s\S]*KALİBRASYON/);
+});
+
+test("karne: kotasyonu olmayan bacak — derin OTM değersiz, aksi halde değerleme atlanır", async () => {
+  const { exitValue } = await import("../options/book.mjs");
+  const legs = [{ type: "C", K: 120, side: 1, occ: null }];
+  assert.equal(exitValue(legs, { S: 100, calls: [{ strike: 120, bid: 0, ask: 0 }], puts: [] }), 0);
+  assert.equal(exitValue(legs, { S: 119, calls: [{ strike: 120, bid: 0, ask: 0 }], puts: [] }), null);
+  assert.equal(exitValue(legs, { S: 100, calls: [], puts: [] }), null);
+});
+
 test("günlükten haftalık mum", () => {
   const day = d => Date.UTC(2026, 10, d, 14, 30);
   const daily = [17, 18, 19, 20, 23, 24].map((d, i) => ({ ts: day(d), open: i, high: 10 + i, low: i, close: i + 0.5, volume: 1 }));
