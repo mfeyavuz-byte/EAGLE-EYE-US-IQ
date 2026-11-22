@@ -25,14 +25,14 @@ import { writeFileSync } from "node:fs";
 import { analyze, quality, loadUniverse, rankAndClassify, setMomCuts } from "../spot/scan.mjs";
 import { fetchChart } from "../data/yahoo.mjs";
 import { alpacaEnabled, optionBars } from "../data/alpaca.mjs";
-import { bs } from "./bs.mjs";
+import { bs, impliedVol } from "./bs.mjs";
 import { hvC2C } from "./vol.mjs";
 
 const E = (k, d) => (process.env[k] ? process.env[k] : d);
 const N = +E("BT_N", 120), STEP = +E("BT_STEP", 5), NAL = +E("BT_AL", 5), NSAT = +E("BT_SAT", 3), DELTA = +E("BT_DELTA", 0.6);
 const START = E("BT_START", "2024-03-01");
 const END = E("BT_END", new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10));
-const R = 0.045, TP = 1.0, SL = -0.5, EXIT_DTE = 21, MIN_DTE = 35;
+const R = 0.045, TP = 1.0, SL = -0.5, EXIT_DTE = 21, MIN_DTE = +E("BT_MIN_DTE", 35);   // LEAPS testi: BT_MIN_DTE=180
 const COSTS = [0, 0.03, 0.06];
 const OUT = E("BT_OUT", "");
 
@@ -47,7 +47,7 @@ function thirdFriday(y, m) {
 }
 export function pickExpiry(entry) {
   const [y, m] = entry.split("-").map(Number);
-  for (let k = 0; k < 4; k++) {
+  for (let k = 0; k < 16; k++) {                                   // LEAPS için (BT_MIN_DTE=180) 15 aya kadar
     const f = thirdFriday(y + Math.floor((m - 1 + k) / 12), (m - 1 + k) % 12);
     if (dayDiff(entry, f) >= MIN_DTE) return f;
   }
@@ -194,8 +194,12 @@ async function main() {
       }
       if (!res.sig || !res.ctl) { miss++; return; }
       const und = d => rows.find(r => iso(r.ts) === d)?.close ?? null;
+      // Faz 8: girişteki örtük oynaklık / gerçekleşen oynaklık ("ucuz IV'de al" testi)
+      const Se = und(res.sig.entry.d) ?? S, Te = Math.max(1, dayDiff(res.sig.entry.d, exp)) / 365;
+      const iv = impliedVol(res.sig.type, res.sig.entry.c, Se, res.sig.K, Te, R, 0);
       trades.push({
-        sym: p.sym, signal: p.signal, conf: p.confidence, d: p.d, entryDay, exp, S,
+        sym: p.sym, signal: p.signal, conf: p.confidence, d: p.d, entryDay, exp, S, hv: +sigma.toFixed(4),
+        ivhv: iv ? +(iv / sigma).toFixed(3) : null,
         sig: { ...res.sig, und: und(res.sig.exit.d) }, ctl: { ...res.ctl },
       });
       done++;
@@ -246,6 +250,14 @@ export function report(trades) {
     }
   }
   const c = 0.03;
+  // ── Faz 8: girişteki IV/HV'ye göre (ucuz IV'de alım daha mı iyi?) ──
+  if (trades.some(t => t.ivhv != null)) {
+    L.push("", "── Girişte IV / gerçekleşen oynaklık (maliyet %3) ──");
+    for (const [lo, hi, lab] of [[0, 0.9, "IV/HV < 0.9 (ucuz)"], [0.9, 1.1, "IV/HV 0.9–1.1"], [1.1, 1.3, "IV/HV 1.1–1.3"], [1.3, 99, "IV/HV > 1.3 (pahalı)"]]) {
+      const g = trades.filter(t => t.ivhv != null && t.ivhv >= lo && t.ivhv < hi);
+      L.push(line(`  ${lab}`, summarize(g.map(t => t.sig), c)));
+    }
+  }
   // ── Çıkış kuralı karşılaştırması: aynı fiyat yolları, farklı kurallar (maliyet %3) ──
   if (trades.some(t => t.sig.path)) {
     L.push("", "── ÇIKIŞ KURALLARI (aynı işlemler, maliyet %3) ──");
