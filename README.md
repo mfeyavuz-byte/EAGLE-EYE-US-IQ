@@ -43,6 +43,8 @@ Eğitim (< Mart 2025) ve test (≥ Mart 2025) dönemleri ayrı; yalnızca **ikis
 | **Yeni AL** (momentum lideri geri çekilmede) | **+%2.1** | **+%3.7** |
 | SAT (teyitli düşüş + zayıf momentum) — negatif = doğru | −%1.3 | −%1.1 |
 | AL adayı + son 10 günde hacimli sert düşüş → **elenir** | −%0.4 (isabet %32) | −%2.2 (isabet %36) |
+| **Hayatta kalan yanlılığı temizlenmiş** (o tarihteki S&P 500 üyeleri, 573 hisse): AL ilk 10 | **+%1.5** | **+%2.1** |
+| aynı veri: SAT (negatif = doğru; kırpılmış ort. yalnız −%0.1) | −%0.7 | −%0.9 |
 | Bilanço sonrası yukarı trend (hacimli +%5 şok) — *eklenmedi, tutarsız* | +%0.5 | +%1.0 (t ≤ 1) |
 
 Dürüst notlar: isabet ~%50, **medyan** fazla getiri yalnız +%0.3 → avantaj büyük kazananlardan gelir;

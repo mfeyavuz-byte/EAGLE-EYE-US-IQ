@@ -18,13 +18,13 @@ export const OCFG = {
   MIN_EDGE: +(process.env.OPT_MIN_EDGE || 0.03),     // EV / maks zarar ≥ %3
   ACCOUNT: +(process.env.OPT_ACCOUNT || 10000),      // boyutlandırma için hesap büyüklüğü ($)
   RISK: +(process.env.OPT_RISK || 0.02),             // işlem başına hesabın en çok %2'si riske
-  // KALİBRE YÖN: research/ ölçümü — seçilen hisselerin 21 günde evrene göre fazla getirisi
-  //   AL (momentum lideri geri çekilmede, günde ilk 10): ort. +%2.1 / +%3.7, %5 kırpılmış ort. +%1.45/ay
-  //     → kırpılmışın YARISI ≈ +%0.75/ay ≈ yıllık +0.09
-  //   SAT (teyitli düşüş + zayıf momentum): ~−%1.2/ay → YARISI −%0.6/ay ≈ yıllık −0.07
-  // Yarıya indirme: hayatta kalan yanlılığı + aşırı uyum + rejim değişimi payı. Kayma = r − q + bu fazla getiri.
-  EDGE_AL: +(process.env.OPT_EDGE_AL || 0.09),
-  EDGE_SAT: +(process.env.OPT_EDGE_SAT || 0.07),
+  // KALİBRE YÖN (başlangıç değeri; canlıda bot/calib.mjs günceller): O TARİHTEKİ S&P 500 üyeleriyle (hayatta
+  // kalan yanlılığı yok) 21 günlük fazla getiri, %5 kırpılmış ortalama:
+  //   AL (günde ilk 10): +%1.16/ay → YARISI +%0.58/ay ≈ yıllık +0.07
+  //   SAT: −%0.12/ay → YARISI ≈ yıllık −0.007 (pratikte sıfır; put zaten kapalı)
+  // Yarıya indirme: aşırı uyum + rejim değişimi payı. Kayma = r − q + bu fazla getiri.
+  EDGE_AL: +(process.env.OPT_EDGE_AL || 0.07),
+  EDGE_SAT: +(process.env.OPT_EDGE_SAT || 0.007),
   // Eski (kalibresiz) eğim: yalnız filtre bilgisi olmayan çağrılarda (testler) — score·TILT·σ/√T
   TILT: +(process.env.OPT_TILT || 0.15),
   // Vade yapısı (yakın IV / IV30). > INV → ters: oynaklık avantajı iddia edilmez (σ ≥ IV).
