@@ -16,6 +16,14 @@ on:
     - cron: "0 17 * * 1-5"
     - cron: "0 18 * * 1-5"
     - cron: "0 19 * * 1-5"
+    # Yedek tetikler (saat başı yoğunluğundan uzak dakikalar — GitHub cron'u atlayabiliyor; fazlası kuyrukta bekler, zararsız)
+    - cron: "7 13 * * 1-5"
+    - cron: "52 13 * * 1-5"
+    - cron: "19 14 * * 1-5"
+    - cron: "47 14 * * 1-5"
+    - cron: "23 15 * * 1-5"
+    - cron: "41 16 * * 1-5"
+    - cron: "29 18 * * 1-5"
   workflow_dispatch:
     inputs:
       force:
@@ -55,15 +63,19 @@ jobs:
           FORCE: ${{ inputs.force && '1' || '' }}
         run: |
           set +e
-          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+          if [ -n "$FORCE" ]; then   # yalnız "force" (piyasa kapalıyken test) tek run; normal manuel tetik de döngü kurar
             node bot/run.mjs; rc=$?
-            echo "Manuel tetik — tek run (çıkış $rc)."
+            echo "Zorla test — tek run (çıkış $rc)."
             [ $rc -eq 1 ] && exit 1 || exit 0
           fi
           for i in $(seq 1 28); do   # 28 × (~10 dk + ~1,5 dk tarama) ≈ 330 dk < 355 dk iş sınırı; kalan seansı sonraki cron devralır
-            echo "=== İterasyon $i · NY $(TZ=America/New_York date +%H:%M) ==="
+            hm=$(TZ=America/New_York date +%H%M)
+            echo "=== İterasyon $i · NY ${hm:0:2}:${hm:2:2} ==="
             node bot/run.mjs; rc=$?
-            if [ $rc -eq 3 ]; then echo "Piyasa kapalı — döngü bitti."; break; fi
+            if [ $rc -eq 3 ]; then
+              # Açılış öncesi (07:00–09:29 NY) kapalı = henüz açılmadı → bekle; sonrası/tatil = döngü biter
+              if [ $((10#$hm)) -ge 700 ] && [ $((10#$hm)) -lt 930 ]; then echo "Açılış bekleniyor."; else echo "Piyasa kapalı — döngü bitti."; break; fi
+            fi
             sleep 600
           done
           exit 0
