@@ -5,11 +5,12 @@ name: EAGLE-EYE US IQ — Spot + Opsiyon
 # ABD seansı 09:30–16:00 New York = 13:30–20:00 UTC (yaz) / 14:30–21:00 UTC (kış).
 # Piyasa kapalıysa run.mjs 3 koduyla çıkar → döngü biter; sonraki cron yeniden dener.
 on:
-  # Türkiye saatiyle 16:30 → 00:30 her yarım saat (TR = UTC+3, yaz saati yok) = 13:30 → 21:30 UTC, Pzt–Cum.
+  # Türkiye saatiyle 15:30 → 00:30 her yarım saat (TR = UTC+3, yaz saati yok) = 12:30 → 21:30 UTC, Pzt–Cum.
+  # 15:30/16:00 TR: ABD yaz saatinde (Mart–Kasım) sabah SPY/QQQ mesajı açılıştan önce gelsin diye (NY 08:30/09:00).
   # Bir döngü çalışırken gelen tetik kuyrukta bekler (yenisi eskisinin yerini alır) → atlanan cron'a karşı yedek.
   schedule:
-    - cron: "30 13-21 * * 1-5"   # TR 16:30, 17:30, … 00:30
-    - cron: "0 14-21 * * 1-5"    # TR 17:00, 18:00, … 00:00
+    - cron: "30 12-21 * * 1-5"   # TR 15:30, 16:30, … 00:30
+    - cron: "0 13-21 * * 1-5"    # TR 16:00, 17:00, … 00:00
   workflow_dispatch:
     inputs:
       force:
