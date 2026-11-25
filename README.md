@@ -110,6 +110,10 @@ Beklenti: Alımda oynaklık primini sen ödersin, orta ölçekli hisselerin opsi
   - Ortak: pozisyon başına kolun %10'u (tek kontrat aşarsa %20'ye kadar 1 adet), en çok 8 açık, zarar durdurma −%50,
     kâr hedefi yok (test #4), giriş/çıkış orta ± %30 spread, günde bir canlı zincirle değerleme. İşlem mesajı her
     alım/satımda; kollar haftalık / aylık / 3 aylık **model portföy raporlarına** eklenir; `/portfoy`'da görünür.
+- **⏱ SPY/QQQ 15 dk opsiyon fikri (`bot/idx15.mjs`):** seans içinde 09:45–15:45 NY (TR kışın 17:45–23:45) her çeyrek saatte
+  tek mesaj. Yön skoru (5 dk mum): VWAP, EMA9/21, açılış aralığı kırılımı, son 15 dk ivmesi, günlük trend, VIX; aşırı RSI cezası.
+  |skor| ≥ 3 → CALL/PUT ALIM (14:30 NY'ye kadar 0DTE, sonra sonraki vade, delta ~0.45–0.50), değilse NÖTR. Stop/hedef dayanakta
+  1:2 (R = 1.5×ATR5dk), opsiyon karşılıkları Black-Scholes ile; olasılıklar dürüst (%33 kuramsal). Geriye dönük test edilmedi.
 - **💎 Değer (ucuz hisse) portföyü (`bot/value.mjs`) — $100.000:** S&P 500 + ≥ $10 milyar Nasdaq, fiyat ≥ $10.
   Kalite kapıları (değer tuzağına karşı): kârlı (EPS > 0, marj > %5, özsermaye kârlılığı > %8), borç/özsermaye < 200,
   serbest nakit akışı > 0, bot SAT demiyor, 52h zirvenin ≥ %60'ı. Ucuzluk puanı: 1/FK, 1/ileri FK, 1/PDDD,

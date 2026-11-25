@@ -98,6 +98,16 @@ export async function news(symbol, limit = 5) {
 
 // Piyasa açık mı? (resmî tatilleri bilir). Alpaca yoksa null → çağıran saat hesabına düşer.
 // Bugün işlem günü mü? (resmî tatiller dahil) true/false | null (Alpaca yok/erişilemedi)
+// GÜN İÇİ MUM (IEX, gerçek zamanlı) — { SYM: [{ts, open, high, low, close, volume}] }. startIso: ISO zaman damgası.
+export async function intradayBars(symbols, startIso, timeframe = "5Min") {
+  const out = {};
+  if (!alpacaEnabled()) return out;
+  const j = await getJSON(`https://data.alpaca.markets/v2/stocks/bars?symbols=${encodeURIComponent(symbols.join(","))}&timeframe=${timeframe}&start=${encodeURIComponent(startIso)}&limit=10000&feed=iex`);
+  for (const [s, arr] of Object.entries(j?.bars || {}))
+    out[s] = (arr || []).map(b => ({ ts: Date.parse(b.t), open: b.o, high: b.h, low: b.l, close: b.c, volume: b.v || 0 }));
+  return out;
+}
+
 export async function isTradingDay(dateIso) {
   if (!alpacaEnabled()) return null;
   const j = await getJSON(`https://paper-api.alpaca.markets/v2/calendar?start=${dateIso}&end=${dateIso}`);
