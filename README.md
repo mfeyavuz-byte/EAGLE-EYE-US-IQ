@@ -114,6 +114,13 @@ Beklenti: Alımda oynaklık primini sen ödersin, orta ölçekli hisselerin opsi
   tek mesaj. Yön skoru (5 dk mum): VWAP, EMA9/21, açılış aralığı kırılımı, son 15 dk ivmesi, günlük trend, VIX; aşırı RSI cezası.
   |skor| ≥ 3 → CALL/PUT ALIM (14:30 NY'ye kadar 0DTE, sonra sonraki vade, delta ~0.45–0.50), değilse NÖTR. Stop/hedef dayanakta
   1:2 (R = 1.5×ATR5dk), opsiyon karşılıkları Black-Scholes ile; olasılıklar dürüst (%33 kuramsal). Geriye dönük test edilmedi.
+- **⚡ Ani hareket / ani dönüş alarmı (`bot/fast.mjs`):** seans boyunca arka planda ~30 sn'de bir, 16 likit opsiyonlu sembolde
+  (SPY, QQQ, IWM, NVDA, TSLA, AAPL, MSFT, AMZN, META, GOOGL, AMD, AVGO, NFLX, PLTR, COIN, MU; `FAST_SYMS` ile değişir) 1 dk mumlar.
+  Son 5 dk getirisi normal oynaklığın ≥ 3.5σ katı + hacim ≥ 1.8× + 30 dk zirvesi/dibi kırıldı → **anında** CALL/PUT ALIM fikri
+  (kontrat, prim, stop = patlamanın yarısı, hedef 2R, zaman stopu 30 dk). Gün dibi/zirvesinden sonraki 30 dk içindeki ters
+  patlama "ANİ DÖNÜŞ" diye gelir. Saf V-dönüş kuralı ölçümde kaybettirdi (ort. −0.17R) → kapalı (`FAST_REV=1` ile açılır).
+  Ölçüm (19–25 Kasım, gerçek 1 dk veri): 15 alarm, 9 hedef, 3 stop, ort. +1.12R — örneklem küçük, canlı karne şart.
+  Sembol başına 20 dk'da 1, tarama başına en güçlü 3, günde en çok 20 alarm.
 - **💎 Değer (ucuz hisse) portföyü (`bot/value.mjs`) — $100.000:** S&P 500 + ≥ $10 milyar Nasdaq, fiyat ≥ $10.
   Kalite kapıları (değer tuzağına karşı): kârlı (EPS > 0, marj > %5, özsermaye kârlılığı > %8), borç/özsermaye < 200,
   serbest nakit akışı > 0, bot SAT demiyor, 52h zirvenin ≥ %60'ı. Ucuzluk puanı: 1/FK, 1/ileri FK, 1/PDDD,

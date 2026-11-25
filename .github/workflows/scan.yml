@@ -4,7 +4,8 @@ name: EAGLE-EYE US IQ — Spot + Opsiyon
 # Bu yüzden bot cron'a BAĞIMLI DEĞİL: her çalışma ~5,5 saat sürer, bitmeden kendi yerine yenisini başlatır
 # (workflow_dispatch, GITHUB_TOKEN) → 7/24 tek bir zincir. Eşzamanlılık grubu aynı anda en çok 1 çalışma + 1 bekleyen tutar.
 # Döngü içinde: run.mjs her 10 dk (sabah mesajı 07:30–09:29 NY, seans taraması, Telegram komutları — gece de cevaplanır);
-# bot/idx15.mjs her çeyrek saat (SPY/QQQ 15 dk opsiyon fikri, 09:45–15:45 NY). main'e yeni kod gelirse zincir yeni kodla yenilenir.
+# bot/idx15.mjs her çeyrek saat (SPY/QQQ 15 dk opsiyon fikri, 09:45–15:45 NY); ARKA PLANDA bot/fast.mjs ~30 sn'de bir
+# ani hareket/dönüş alarmı (16 likit sembol, anında). main'e yeni kod gelirse zincir yeni kodla yenilenir.
 # Cron'lar yalnız YEDEK: zincir bir şekilde koparsa (ör. GitHub kesintisi) ilk gelen tetik zinciri yeniden kurar.
 on:
   # Türkiye saatiyle 15:30 → 00:30 her yarım saat (TR = UTC+3, yaz saati yok) = 12:30 → 21:30 UTC, Pzt–Cum.
@@ -60,9 +61,14 @@ jobs:
           if [ -n "$FORCE" ]; then   # "force" (piyasa kapalıyken test): tek tarama + tek 15 dk fikri; ardından zincir yine başlar
             node bot/run.mjs; rc=$?
             node bot/idx15.mjs
+            FAST_ONCE=1 node bot/fast.mjs
             echo "Zorla test — tek run (çıkış $rc)."
             [ $rc -eq 1 ] && exit 1 || exit 0
           fi
+          # Ani hareket alarmı ARKA PLANDA kesintisiz (tarama sürerken de çalışır); süreç ~55 dk'da bir tazelenir, çökerse 10 sn'de yeniden başlar
+          ( while :; do timeout 3600 node bot/fast.mjs; sleep 10; done ) &
+          FAST_PID=$!
+          trap 'kill $FAST_PID 2>/dev/null; pkill -f "node bot/fast.mjs" 2>/dev/null; true' EXIT
           t0=$(date +%s); last_scan=0; last_q=""; last_git=$t0
           while [ $(( $(date +%s) - t0 )) -lt 19800 ]; do          # 330 dk; 355 dk iş sınırının altında
             now=$(date +%s)

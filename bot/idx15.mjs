@@ -103,38 +103,44 @@ async function oneSymbol(sym, ctx) {
   const head = `${sym} $${f2(S)} · gün ${pct(sig.dayChg)} · VWAP ${f2(sig.vwap)}${sig.rsi != null ? ` · RSI(5dk) ${sig.rsi.toFixed(0)}` : ""}`;
   if (!sig.dir) return { sym, sig, text: `${head}\n⚪ NÖTR (skor ${sig.score >= 0 ? "+" : ""}${sig.score}) — net yön yok → işlem yok, bekle.${sig.why.length ? `\n   ${sig.why.join(" · ")}` : ""}` };
 
-  // Vade: 14:30 NY'ye kadar 0DTE, sonrası 1DTE (son saatlerde 0DTE zaman kaybı çok sert)
-  const want0 = mins < IDX.ODTE_UNTIL;
+  // Vade: 14:30 NY'ye kadar 0DTE, sonrası sonraki vade (son saatlerde 0DTE zaman kaybı çok sert)
+  const c = await contractIdea({ sym, dir: sig.dir, S, stop: sig.stop, target: sig.target, r, today, allow0: mins < IDX.ODTE_UNTIL });
+  const lab = sig.dir === "C" ? "🟢 CALL AL" : "🔴 PUT AL";
+  const L = [head, `${lab} — skor ${sig.score >= 0 ? "+" : ""}${sig.score} · ${sig.why.join(" · ")}`, ...c.lines];
+  return { sym, sig, pick: c.pick, text: L.join("\n") };
+}
+
+// ORTAK KONTRAT FİKRİ (15 dk fikri + ani hareket alarmı): yön + dayanak seviyeleri → likit kontrat, prim, opsiyonun stop/hedef
+// karşılığı, olasılıklar. allow0: bugün vadeli (0DTE) kullanılabilir mi. Dönüş: { pick, expD, lines }
+export async function contractIdea({ sym, dir, S, stop, target, r = 0.04, today, allow0 = false, timeStop = null }) {
   const first = await optionChain(sym).catch(() => null);
   const exps = (first?.expirations || []).map(e => ({ e, d: new Date(e * 1e3).toISOString().slice(0, 10) }));
-  const ex = want0 ? exps.find(x => x.d === today) ?? exps.find(x => x.d > today) : exps.find(x => x.d > today);
-  let pick = null, T = null, expD = ex?.d;
+  const ex = allow0 ? exps.find(x => x.d === today) ?? exps.find(x => x.d > today) : exps.find(x => x.d > today);
+  let pick = null;
   if (ex) {
     const ch = ex.e === first.exp ? first : await optionChain(sym, ex.e).catch(() => null);
-    T = Math.max(15 * 60e3, nyTs(ex.d, 16, 0) - Date.now()) / YR;
+    const T = Math.max(15 * 60e3, nyTs(ex.d, 16, 0) - Date.now()) / YR;
     const q = Math.min(0.05, first?.quote?.divYield || 0);
     // Opsiyon kotasyonları dayanaktan birkaç dk gecikmeli olabilir → IV/delta, zincirin kendi ima ettiği fiyatla (parite) hesaplanır;
     // stop/hedef aynı mesafeyle o fiyata taşınır (aksi halde 0DTE'de IV ve olasılıklar ciddi bozulur).
     const So = ch ? paritySpot([{ T, calls: ch.calls, puts: ch.puts }], S, r, q) ?? S : S;
-    pick = ch ? pickIdxContract(sig.dir === "C" ? ch.calls : ch.puts, sig.dir, So, T, r, q, ex.d === today ? 0.45 : 0.5) : null;
+    pick = ch ? pickIdxContract(dir === "C" ? ch.calls : ch.puts, dir, So, T, r, q, ex.d === today ? 0.45 : 0.5) : null;
     if (pick) {
       pick.prem = +(pick.mid + IDX.SLIP * (pick.ask - pick.bid)).toFixed(2);
       const T2 = Math.max(5 * 60e3, T * YR - 30 * 60e3) / YR;           // seviyeye ~30 dk'da varıldığı varsayımı
-      pick.atStop = bs(sig.dir, So + (sig.stop - S), pick.K, T2, r, q, pick.iv).price;
-      pick.atTgt = bs(sig.dir, So + (sig.target - S), pick.K, T2, r, q, pick.iv).price;
-      pick.pop = popLong(sig.dir, So, pick.K, pick.prem, T, pick.iv);
+      pick.atStop = bs(dir, So + (stop - S), pick.K, T2, r, q, pick.iv).price;
+      pick.atTgt = bs(dir, So + (target - S), pick.K, T2, r, q, pick.iv).price;
+      pick.pop = popLong(dir, So, pick.K, pick.prem, T, pick.iv);
     }
   }
-  const lab = sig.dir === "C" ? "🟢 CALL AL" : "🔴 PUT AL";
-  const L = [head, `${lab} — skor ${sig.score >= 0 ? "+" : ""}${sig.score} · ${sig.why.join(" · ")}`];
-  L.push(`   Dayanak: giriş ~${f2(S)} · stop ${f2(sig.stop)} · hedef ${f2(sig.target)} (risk/ödül 1:${IDX.RR})`);
+  const expD = ex?.d, L = [`   Dayanak: giriş ~${f2(S)} · stop ${f2(stop)} · hedef ${f2(target)} (risk/ödül 1:${IDX.RR})`];
   if (pick) {
     const dte = expD === today ? "0DTE (bugün)" : `sonraki vade (${expD})`;
-    L.push(`   Kontrat: ${sym} ${pick.K}${sig.dir} · ${dte} · delta ${Math.abs(pick.delta).toFixed(2)} · prim ~$${f2(pick.prem)} (spread %${(pick.spread * 100).toFixed(0)})`);
-    L.push(`   Opsiyon: stop ≈ $${f2(pick.atStop)} (${pct(pick.atStop / pick.prem - 1)}) · hedef ≈ $${f2(pick.atTgt)} (${pct(pick.atTgt / pick.prem - 1)}) · zaman stopu ${expD === today ? "45" : "90"} dk`);
+    L.push(`   Kontrat: ${sym} ${pick.K}${dir} · ${dte} · delta ${Math.abs(pick.delta).toFixed(2)} · prim ~$${f2(pick.prem)} (spread %${(pick.spread * 100).toFixed(0)})`);
+    L.push(`   Opsiyon: stop ≈ $${f2(pick.atStop)} (${pct(pick.atStop / pick.prem - 1)}) · hedef ≈ $${f2(pick.atTgt)} (${pct(pick.atTgt / pick.prem - 1)}) · zaman stopu ${timeStop ?? (expD === today ? 45 : 90)} dk`);
     L.push(`   Olasılık: hedefin stoptan önce gelmesi ≈ %33 (kuramsal, 1:2) · vadede kâr ${pick.pop != null ? "%" + Math.round(pick.pop * 100) : "—"}`);
-  } else L.push("   Kontrat: likit 0DTE/1DTE kontrat bulunamadı (spread geniş ya da zincir alınamadı) → dayanak seviyeleriyle izle.");
-  return { sym, sig, pick, text: L.join("\n") };
+  } else L.push("   Kontrat: likit kısa vadeli kontrat bulunamadı (spread geniş ya da zincir alınamadı) → dayanak seviyeleriyle izle.");
+  return { pick, expD, lines: L };
 }
 
 export async function buildIdx15(now = new Date()) {
@@ -144,7 +150,7 @@ export async function buildIdx15(now = new Date()) {
     riskFreeRate().catch(() => 0.04),
     quoteNow("^VIX").catch(() => null),
     alpacaEnabled() ? liveQuotes(IDX.SYMS).catch(() => ({})) : {},
-    alpacaEnabled() ? intradayBars(IDX.SYMS, new Date(sessStart).toISOString()).catch(() => ({})) : {},
+    alpacaEnabled() ? intradayBars(IDX.SYMS, new Date(sessStart).toISOString()).then(x => x || {}).catch(() => ({})) : {},
   ]);
   const vix = vq ? { now: vq.price, prev: vq.prevClose } : null;
   const ctx = { today, sessStart, mins, r, vix, live, intra };
