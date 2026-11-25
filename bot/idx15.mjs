@@ -13,6 +13,9 @@ import { bs, impliedVol } from "../options/bs.mjs";
 import { paritySpot } from "../options/chain.mjs";
 import { popLong } from "./morning.mjs";
 import { sendTG } from "./telegram.mjs";
+import { loadFiles, saveFiles, READ_FAILED } from "./state.mjs";
+import { IDEA_FILES, HORIZON, addIdea, settleIdeas, ideaStats, fmtIdeaStats } from "./ideabook.mjs";
+import { macroEvents, fmtMacroDay, nearEvent, fmtNear } from "./macro.mjs";
 
 export const IDX = { SYMS: ["SPY", "QQQ"], START: 585, END: 950, ODTE_UNTIL: 870, MIN_SCORE: 3, R_ATR: 1.5, R_MIN: 0.0015, RR: 2, SLIP: 0.3, MAX_SPREAD: 0.15 };
 const YR = 365 * 864e5;
@@ -143,7 +146,8 @@ export async function contractIdea({ sym, dir, S, stop, target, r = 0.04, today,
   return { pick, expD, lines: L };
 }
 
-export async function buildIdx15(now = new Date()) {
+// extra: { ev: makro olaylar, pre: başa eklenecek satırlar (ör. dünkü karne) }
+export async function buildIdx15(now = new Date(), extra = {}) {
   const { date: today, mins } = nyParts(now);
   const sessStart = nyTs(today, 9, 30);
   const [r, vq, live, intra] = await Promise.all([
@@ -158,7 +162,8 @@ export async function buildIdx15(now = new Date()) {
   for (const sym of IDX.SYMS) parts.push(await oneSymbol(sym, ctx).catch(e => ({ sym, text: `${sym}: hata (${e?.message || e})` })));
   const hh = String(Math.floor(mins / 60)).padStart(2, "0"), mm = String(mins % 60).padStart(2, "0");
   const text = [`⏱ SPY/QQQ 15 DK OPSİYON FİKRİ — ${hh}:${mm} NY · ${fmtTR(now)} TR`,
-    vix ? `VIX ${f2(vix.now)} (${pct(vix.prev ? vix.now / vix.prev - 1 : null)})` : "VIX —", "",
+    vix ? `VIX ${f2(vix.now)} (${pct(vix.prev ? vix.now / vix.prev - 1 : null)})` : "VIX —",
+    ...[fmtMacroDay(extra.ev, today), fmtNear(nearEvent(extra.ev, now.getTime()), now.getTime()), ...(extra.pre || [])].filter(Boolean), "",
     parts.map(p => p.text).join("\n\n"), "",
     `Yalnız ALIM (call/put alımı, opsiyon satışı yok). Kaynak: ${alpacaEnabled() ? "Alpaca IEX canlı" : "Yahoo"} + Yahoo opsiyon zinciri. Geriye dönük test edilmedi. ⚠ Yatırım tavsiyesi değildir.`].join("\n");
   return { text, parts };
@@ -171,9 +176,29 @@ async function main() {
     if (wd === "Sat" || wd === "Sun" || mins < IDX.START || mins >= IDX.END) { console.log("[15dk] seans penceresi dışında."); return 3; }
     if (!(await isMarketOpen())) { console.log("[15dk] piyasa kapalı (tatil)."); return 3; }
   }
-  const { text } = await buildIdx15();
+  // Canlı karne: kendi Gist dosyası (okunamazsa karne bu sefer atlanır, fikir yine gönderilir)
+  const files = await loadFiles([IDEA_FILES.idx]);
+  const book = files === READ_FAILED ? null : files[IDEA_FILES.idx];
+  const today = nyParts().date, pre = [];
+  if (book) {
+    await settleIdeas(book, s => fetchChart(s, "1m", "5d")).catch(e => console.error("[15dk] karne:", e?.message || e));
+    if (book.lastDay !== today) {                                 // günün ilk mesajı: dünkü + 7 günlük karne
+      const d0 = nyTs(today, 0, 0);
+      const prev0 = book.lastTs ? nyTs(nyParts(new Date(book.lastTs)).date, 0, 0) : d0 - 864e5;   // son işlem gününün başı (tatil/hafta sonu atlanır)
+      pre.push(fmtIdeaStats("📒 Önceki işlem günü karnesi", ideaStats(book.ideas, prev0, d0)),
+        fmtIdeaStats("📒 Son 7 gün", ideaStats(book.ideas, d0 - 7 * 864e5, d0)));
+    }
+  }
+  const ev = await macroEvents().catch(() => []);
+  const { text, parts } = await buildIdx15(new Date(), { ev, pre });
   const ok = await sendTG(text);
   console.log(`[15dk] SPY/QQQ fikri ${ok ? "gönderildi" : "GÖNDERİLEMEDİ"}.`);
+  if (ok && book) {
+    const now = Date.now();
+    for (const p of parts) if (p.sig?.dir) addIdea(book, { src: "idx", sym: p.sym, dir: p.sig.dir, ts: now, S: p.sig.S, stop: p.sig.stop, target: p.sig.target, hor: HORIZON.idx, score: p.sig.score });
+    book.lastDay = today; book.lastTs = now;
+    await saveFiles({ [IDEA_FILES.idx]: book });
+  }
   return ok ? 0 : 1;
 }
 

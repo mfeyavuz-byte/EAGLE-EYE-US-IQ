@@ -16,6 +16,9 @@ import { intradayBars, liveQuotes, alpacaEnabled, marketClock } from "../data/al
 import { fetchChart, riskFreeRate } from "../data/yahoo.mjs";
 import { contractIdea, nyTs, IDX } from "./idx15.mjs";
 import { sendTG } from "./telegram.mjs";
+import { loadFiles, saveFiles, READ_FAILED } from "./state.mjs";
+import { IDEA_FILES, HORIZON, addIdea, settleIdeas } from "./ideabook.mjs";
+import { macroEvents, nearEvent, fmtNear } from "./macro.mjs";
 
 const ETFS = new Set(["SPY", "QQQ", "IWM", "DIA"]);
 export const FAST = {
@@ -114,7 +117,8 @@ async function barsFor(syms, sessStart, today) {
 }
 
 // Tek tarama: bulunan alarmları gönderir. Dönüş: gönderilen sayısı
-export async function scanFast(st, now = Date.now(), toCloseMin = null) {
+// opts: { ev: makro olaylar, book: karne defteri (gönderilen alarm buraya eklenir) }
+export async function scanFast(st, now = Date.now(), toCloseMin = null, opts = {}) {
   const { date: today, mins } = nyParts(new Date(now));
   if (st.day !== today) { st.day = today; st.cd = {}; st.n = 0; }
   if (st.n >= FAST.MAX_DAY) return 0;
@@ -141,10 +145,12 @@ export async function scanFast(st, now = Date.now(), toCloseMin = null) {
     const title = sig.kind === "burst" ? (sig.dir === "C" ? "⚡ ANİ YÜKSELİŞ" : "⚡ ANİ DÜŞÜŞ") : (sig.dir === "C" ? "↩️ ANİ DÖNÜŞ (dipten)" : "↩️ ANİ DÖNÜŞ (tepeden)");
     const text = [`${title} — ${sym} · ${hh}:${mm} NY · ${fmtTR(new Date(now))} TR`, sig.why,
       `${sig.dir === "C" ? "🟢 CALL AL" : "🔴 PUT AL"} (yalnız alım)`, ...c.lines,
+      ...(fmtNear(nearEvent(opts.ev, now), now) ? ["   " + fmtNear(nearEvent(opts.ev, now), now)] : []),
       ...(i === 0 && rest.length ? [`   Aynı anda: ${rest.map(x => `${x.sym} ${x.sig.dir === "C" ? "↑" : "↓"} ${pctS(x.sig.move)}`).join(" · ")} (piyasa geneli hareket)`] : []),
       "   Not: ani hareket sonrası devam da geri dönüş de olur → küçük pozisyon, stop'a uy. ⚠ Yatırım tavsiyesi değildir."].join("\n");
     if (await sendTG(text)) {
       st.cd[sym] = now; st.n++; sent++;
+      if (opts.book) addIdea(opts.book, { src: "fast", sym, dir: sig.dir, kind: sig.kind, ts: now, S: sig.S, stop: sig.stop, target: sig.target, hor: HORIZON.fast, z: sig.z });
       if (i === 0) for (const x of rest) st.cd[x.sym] = now;
       console.log(`[⚡] ${sym} ${sig.dir} gönderildi (${sig.kind}, z ${sig.z})`);
     }
@@ -157,14 +163,24 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 async function main() {
   const once = process.env.FAST_ONCE === "1", t0 = Date.now();
   const st = loadSt();
-  let clk = null, clkAt = 0;
+  let clk = null, clkAt = 0, book = null, bookAt = 0, ev = [], evAt = 0;
   do {
     try {
+      // Karne defteri (kendi Gist dosyası): okunamazsa 10 dk sonra tekrar; ufku dolanlar 10 dk'da bir sonuçlandırılır
+      if (Date.now() - bookAt > 10 * 60e3) {
+        bookAt = Date.now();
+        if (!book) { const f = await loadFiles([IDEA_FILES.fast]).catch(() => READ_FAILED); if (f !== READ_FAILED) book = f[IDEA_FILES.fast]; }
+        if (book && await settleIdeas(book, s => fetchChart(s, "1m", "5d")).catch(() => false)) await saveFiles({ [IDEA_FILES.fast]: book });
+      }
+      if (Date.now() - evAt > 30 * 60e3) { ev = await macroEvents().catch(() => []); evAt = Date.now(); }
       if (Date.now() - clkAt > 5 * 60e3) { clk = await marketClock().catch(() => null); clkAt = Date.now(); }
       const open = clk ? clk.open : isRegularHours();
       const { mins } = nyParts();
       const toClose = clk?.nextClose ? (clk.nextClose - Date.now()) / 60e3 : 960 - mins;
-      if ((open && mins >= 575 && toClose >= 10) || process.env.FORCE === "1") { await scanFast(st, Date.now(), toClose); saveSt(st); }
+      if ((open && mins >= 575 && toClose >= 10) || process.env.FORCE === "1") {
+        if (await scanFast(st, Date.now(), toClose, { ev, book }) && book) await saveFiles({ [IDEA_FILES.fast]: book });
+        saveSt(st);
+      }
       else if (once) console.log("[⚡] seans dışı.");
     } catch (e) { console.error("[⚡] hata:", e?.message || e); }
     if (once) break;

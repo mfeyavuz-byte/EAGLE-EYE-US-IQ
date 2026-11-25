@@ -32,6 +32,10 @@ import { fmtAnalysis, fmtDailyIdeas } from "../options/format.mjs";
 import { histOf, snapshot } from "../options/ivhist.mjs";
 import { addIdeas, settle, stats, fmtStats, markBook, fmtClosed } from "../options/book.mjs";
 import { pathToFileURL } from "node:url";
+import { macroEvents, fmtMacroDay } from "./macro.mjs";
+import { IDEA_FILES, fmtIdeaReport } from "./ideabook.mjs";
+import { rankEdge, fmtSectors } from "./edge.mjs";
+import { newsSentiment, newsTag } from "./news.mjs";
 
 const UNI = loadUniverse();
 const SYMS = process.env.SYMBOLS ? process.env.SYMBOLS.split(",").map(s => s.trim().toUpperCase()).filter(Boolean) : UNI.symbols;
@@ -82,10 +86,11 @@ export function fmtSignal(a) {
   if (a.rr) parts.push(`R:R ${a.rr}`);
   if (a.sizePct) parts.push(`boyut ~%${Math.round(a.sizePct * 100)} portföy`);
   if (a.dip) parts.push("DİP");
+  if (a.edgeTag) parts.push(a.edgeTag);
   return parts.join(" · ");
 }
 
-const SIG_KEYS = ["sym", "signal", "price", "confidence", "adx", "rsi", "rs60", "stopLoss", "target1", "rr", "dip", "mom12", "hi52", "sizePct"];
+const SIG_KEYS = ["sym", "signal", "price", "confidence", "adx", "rsi", "rs60", "stopLoss", "target1", "rr", "dip", "mom12", "hi52", "sizePct", "edgeTag"];
 export const compactSignal = a => Object.fromEntries(SIG_KEYS.map(k => [k, a[k]]));
 
 // /sinyaller: filtreyi geçen TÜM sinyaller, AL ve SAT ayrı başlıklarla (kalite sırasıyla). Kesme yok.
@@ -133,6 +138,7 @@ const HELP = [
   "/portfoy — model portföy (sanal, 15 slot; haftalık Cuma, aylık ve 3 aylık rapor otomatik gelir)",
   "/etf — SPY/QQQ kısa vade call/put sinyalinin durumu + ETF karnesi",
   "/sabah — açılış öncesi SPY/QQQ çağrılarının karnesi (mesaj her işlem günü ~08:00–09:30 NY)",
+  "/fikirkarne — 15 dk SPY/QQQ fikirleri ve ani hareket alarmlarının gerçekleşen sonuçları",
   "/durum — bot durumu",
   "/yardim — bu liste",
 ].join("\n");
@@ -214,7 +220,8 @@ async function morningStep(st, ctx) {
     fearGreed: async () => fmtFG(fgNow),
     fg: fgNow?.fg ?? null,
   });
-  if (await sendTG(text, { buttons: [[{ text: "⚡ SPY/QQQ durumu", data: "/etf" }, { text: "🌅 Sabah karnesi", data: "/sabah" }]] })) {
+  const macro = fmtMacroDay(await macroEvents().catch(() => []), today);   // CPI / istihdam / FOMC günü uyarısı
+  if (await sendTG(macro ? `${text}\n\n${macro}` : text, { buttons: [[{ text: "⚡ SPY/QQQ durumu", data: "/etf" }, { text: "🌅 Sabah karnesi", data: "/sabah" }]] })) {
     st.morning.day = today;
     st.morning.book.push(...calls);
     st.om ||= initOptModel(today);
@@ -253,7 +260,7 @@ function spotScored(st) {
   const p = st.lastPx?.p || {};
   return score(st.spotBook || [], s => p[s], st.lastPx?.spy);
 }
-export function weeklyReport(st, today, paperTxt = null) {
+export function weeklyReport(st, today, paperTxt = null, ideaTxt = null) {
   const sc = spotScored(st);
   const open = (st.optBook || []).filter(b => !b.closed);
   const L = [`📅 HAFTALIK RAPOR — ${today}`, "",
@@ -261,7 +268,9 @@ export function weeklyReport(st, today, paperTxt = null) {
     fmtSpotReport(sc, daysAgo(today, 30), "📈 Son 30 gün"), "",
     fmtStats(stats(st.optBook || []))];
   if (paperTxt) L.push("", paperTxt);
+  if (ideaTxt) L.push("", ideaTxt);
   if (st.fg) L.push("", fmtFG(st.fg));
+  if (st.sectors?.top?.length) L.push("", fmtSectors(st.sectors));
   if (st.calib) L.push("", fmtCalib(st.calib));
   if (st.etf) L.push("", fmtEtfBook(st));
   if (st.morning?.book?.length) L.push("", fmtMorningBook(st.morning.book));
@@ -331,6 +340,8 @@ async function handleCommands(st, ivStore, ctx) {
       await sendTG(removeWatch(st, sym) ? `${sym} takipten çıkarıldı.` : `${sym || "?"} takipte değil.`);
     } else if (cmd === "/takiplerim") {
       await sendTG(fmtWatch(st));
+    } else if (cmd === "/fikirkarne") {
+      await sendTG(fmtIdeaReport(ctx.ideas));
     } else if (cmd === "/sabah") {
       await sendTG(fmtMorningBook(st.morning?.book) + (st.morning?.day ? `\nSon sabah mesajı: ${st.morning.day}` : ""));
     } else if (cmd === "/etf") {
@@ -421,7 +432,7 @@ function pickScanSet(st) {
 // ---------- Ana ----------
 export async function main() {
   const t0 = Date.now();
-  const files = await loadFiles([STATE_FILE, IVHIST_FILE]);
+  const files = await loadFiles([STATE_FILE, IVHIST_FILE, IDEA_FILES.idx, IDEA_FILES.fast]);   // fikir dosyaları YALNIZ OKUNUR
   if (files === READ_FAILED) {                // durum bilinmiyor → hiçbir şey yazma, tekrar sinyal spam'i de yapma
     console.log("⚠ Gist okunamadı (geçici) — bu run atlandı, durum korunuyor.");
     return 0;
@@ -431,9 +442,18 @@ export async function main() {
   setMomCuts(st.momCuts);   // son tam taramanın momentum eşikleri (tek sembol analizi + çekirdek tarama için)
   let ivDirty = false;
 
+  // --- ZİNCİR BOŞLUĞU: run.mjs normalde 7/24 ~10 dk'da bir çalışır. 45 dk'dan uzun sessizlik = bot durmuştu → haber ver ---
+  if (gistEnabled() && st.lastRunTs && Date.now() - st.lastRunTs > 45 * 60e3) {
+    const gm = Math.round((Date.now() - st.lastRunTs) / 60e3);
+    await sendTG(`⚠ BOT ${gm >= 120 ? `${(gm / 60).toFixed(1)} SAAT` : `${gm} DK`} ÇALIŞMADI — son çalışma ${fmtTR(new Date(st.lastRunTs))} TR. ` +
+      `Bu sürede sinyal/alarm kaçmış olabilir; şimdi yeniden çalışıyor.`);
+  }
+  st.lastRunTs = Date.now();
+
   // Tembel bağlam: komutlar gerektiğinde bir kez hesaplanır
   let _r = null, _spy = null;
-  const ctx = { r: async () => (_r ??= await riskFreeRate()), spy: async () => (_spy ??= await spyReturn60()) };
+  const ideaBooks = { idx: files[IDEA_FILES.idx], fast: files[IDEA_FILES.fast] };
+  const ctx = { r: async () => (_r ??= await riskFreeRate()), spy: async () => (_spy ??= await spyReturn60()), ideas: ideaBooks };
 
   await handleCommands(st, ivStore, ctx);
 
@@ -473,10 +493,18 @@ export async function main() {
 
   // --- Spot sinyalleri: aynı gün aynı sinyali tekrar gönderme ---
   if (!st.sent || st.sent.date !== today) st.sent = { date: today, map: {}, n: { AL: 0, SAT: 0 } };
+  // Faz 7: kalite + sektör rotasyonu → AL/SAT öncelik sırası ve etiketleri (sinyal silinmez)
+  await rankEdge(st, signals, { secOf: s => UNI.meta?.[s]?.sec || null, closesOf: async e => (await fetchDaily(e)).map(r => r.close), qualityStats, today })
+    .catch(e => console.error("[Faz7]", e?.message || e));
   const fresh = pickFresh(signals, st.sent);
   const held = signals.filter(x => st.sent.map[x.sym] !== x.signal).length;   // kota yüzünden bekleyenler
   const firstOfDay = st.lastHeaderDay !== today;
   if (fresh.length || firstOfDay) {
+    // Haber duygusu (son 48 saat başlıkları) — yalnız BİLGİ etiketi, kurala girmez (research/news.mjs ölçümüne kadar)
+    if (alpacaEnabled()) for (const s of fresh) {
+      const t = newsTag(newsSentiment(await news(s.sym, 20).catch(() => []), Date.now() - 2 * 864e5));
+      if (t) s.edgeTag = s.edgeTag ? `${s.edgeTag} · ${t}` : t;
+    }
     const al = fresh.filter(s => s.signal === "AL"), sat = fresh.filter(s => s.signal === "SAT");
     let m = `🇺🇸 ABD SPOT SİNYALLERİ${firstOfDay ? " — seans açılışı" : " — yeni"}\n${fmtTR()} (TR) · SPY 60g ${sgn(spy.ret60)}%\n` +
       (firstOfDay ? `AL = momentum lideri geri çekilmede (ufuk ~1 ay; stop/hedef/21 gün dolunca ÇIKIŞ mesajı gelir) · SAT = teyitli düşüş + zayıf momentum\nBoyut: stop'a kadar portföyün %${RISK_SPOT * 100}'i riske, tek hisse en çok %${MAX_POS * 100} · sektör başına en çok ${SEC_CAP}\n` : "");
@@ -618,7 +646,7 @@ export async function main() {
   const { wd } = nyParts();
   if ((wd === "Fri" && mins >= 930 && st.lastWeekly !== today) || process.env.WEEKLY_FORCE === "1") {
     st.lastWeekly = today;
-    await sendTG(weeklyReport(st, today, await paperSummary(st)));
+    await sendTG(weeklyReport(st, today, await paperSummary(st), fmtIdeaReport(ideaBooks)));
     if (st.model) {
       const px = new Map(all.map(a => [a.sym, a.price]));
       await sendTG(fmtModel(st.model, `📊 MODEL PORTFÖY — HAFTALIK RAPOR (${today})`, shiftDays(today, -7), s => px.get(s)) + "\n\n" + fmtOptModel(st.om, shiftDays(today, -7)) + "\n\n" + fmtValue(st.vmodel, st.vmodel && periodStats(st.vmodel, shiftDays(today, -7)), "💎 DEĞER (UCUZ HİSSE) PORTFÖYÜ — haftalık"));

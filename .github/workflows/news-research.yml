@@ -1,0 +1,35 @@
+name: Haber duygusu araştırması
+
+# Elle çalıştırılır. Olumlu/olumsuz başlık sonrası 1 ve 5 günlük getiri farkı (SPY'a göre). Sonuç: Telegram + iş özeti.
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Kaç günlük geçmiş"
+        default: "180"
+
+jobs:
+  news:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+      - name: Araştırma
+        env:
+          ALPACA_KEY_ID: ${{ secrets.ALPACA_KEY_ID }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          NEWS_DAYS: ${{ inputs.days }}
+        run: |
+          set -o pipefail
+          node research/news.mjs | tee out.txt
+          { echo '```'; sed -n '/^SONUÇ/,$p' out.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Sonucu Telegram'a gönder
+        if: always()
+        env:
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CHAT: ${{ secrets.TG_CHAT }}
+          BT_INFO: "Haber duygusu · ${{ inputs.days }} gün · commit ${{ github.sha }}"
+        run: node options/send-report.mjs out.txt

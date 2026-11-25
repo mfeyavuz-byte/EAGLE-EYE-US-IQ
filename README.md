@@ -121,6 +121,19 @@ Beklenti: Alımda oynaklık primini sen ödersin, orta ölçekli hisselerin opsi
   patlama "ANİ DÖNÜŞ" diye gelir. Saf V-dönüş kuralı ölçümde kaybettirdi (ort. −0.17R) → kapalı (`FAST_REV=1` ile açılır).
   Ölçüm (19–25 Kasım, gerçek 1 dk veri): 15 alarm, 9 hedef, 3 stop, ort. +1.12R — örneklem küçük, canlı karne şart.
   Sembol başına 20 dk'da 1, tarama başına en güçlü 3, günde en çok 20 alarm.
+- **📒 Canlı fikir karnesi (`bot/ideabook.mjs`):** 15 dk fikirleri (60 dk ufuk) ve ani hareket alarmları (30 dk ufuk) kaydedilir,
+  ufku dolunca 1 dk mumlarla HEDEF / STOP / SÜRE ve R katı olarak sonuçlanır (aynı mumda ikisi = STOP). Günün ilk 15 dk
+  mesajında önceki gün + 7 gün karnesi, haftalık raporda ve `/fikirkarne`'de 7/30 gün. Her süreç kendi Gist dosyasına yazar.
+- **📅 Önemli veri günü uyarısı (`bot/macro.mjs`):** Forex Factory haftalık takvimi (USD, yüksek etki: CPI, istihdam, PCE, GDP…)
+  + 2026 FOMC yedeği. Sabah mesajında ve 15 dk fikirlerinde o günün verileri; veriye ±45 dk kala 15 dk fikri ve ani hareket
+  alarmlarına "sahte kırılım riski" uyarısı.
+- **⚠ Bot durdu uyarısı:** tarama 45 dk'dan uzun çalışmadıysa (zincir koptuysa) yeniden başladığında süreyi bildirir.
+- **🧭 Faz 7 — kalite + sektör rotasyonu (`bot/edge.mjs`):** 11 sektör ETF'inin 3 aylık getirisi; zayıf 3 sektördeki AL ve
+  güçlü 3 sektördeki SAT, zarar eden / nakit yakıp ROE'si negatif / borç/özsermaye > 300 olan AL sıranın sonuna iner ve
+  etiketlenir (silinmez; günlük kota yüzünden pratikte elenir). Geçmiş temel veri ücretsiz değil → geriye dönük test edilemedi.
+- **📰 Haber duygusu (`bot/news.mjs`):** sözlük tabanlı başlık puanı; yeni AL/SAT mesajlarında son 48 saatin etiketi (yalnız
+  bilgi, kurala girmez). `research/news.mjs` (Actions → "Haber duygusu araştırması") olumlu/olumsuz başlık sonrası 1 ve 5
+  günlük SPY'a göre getiriyi ölçer; anlamlı çıkarsa kurala eklenir.
 - **💎 Değer (ucuz hisse) portföyü (`bot/value.mjs`) — $100.000:** S&P 500 + ≥ $10 milyar Nasdaq, fiyat ≥ $10.
   Kalite kapıları (değer tuzağına karşı): kârlı (EPS > 0, marj > %5, özsermaye kârlılığı > %8), borç/özsermaye < 200,
   serbest nakit akışı > 0, bot SAT demiyor, 52h zirvenin ≥ %60'ı. Ucuzluk puanı: 1/FK, 1/ileri FK, 1/PDDD,

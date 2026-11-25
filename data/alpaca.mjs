@@ -96,6 +96,21 @@ export async function news(symbol, limit = 5) {
   return (j?.news || []).map(n => ({ t: n.created_at, headline: String(n.headline || "").trim(), source: n.source || "" })).filter(n => n.headline);
 }
 
+// HABER ARŞİVİ (araştırma): [{ t, headline, symbols }] — sayfalı, en çok maxPages × 50 başlık
+export async function newsRange(symbols, startIso, endIso, maxPages = 400) {
+  const out = [];
+  if (!alpacaEnabled()) return out;
+  let token = null, pages = 0;
+  do {
+    const j = await getJSON(`https://data.alpaca.markets/v1beta1/news?symbols=${encodeURIComponent(symbols.join(","))}&start=${encodeURIComponent(startIso)}&end=${encodeURIComponent(endIso)}&limit=50&sort=asc${token ? "&page_token=" + encodeURIComponent(token) : ""}`, 20000);
+    if (!j) break;
+    for (const n of j.news || []) if (n.headline) out.push({ t: n.created_at, headline: String(n.headline).trim(), symbols: n.symbols || [] });
+    token = j.next_page_token;
+    await new Promise(r => setTimeout(r, 350));                          // ücretsiz plan: ≤ 200 istek/dk
+  } while (token && ++pages < maxPages);
+  return out;
+}
+
 // Piyasa açık mı? (resmî tatilleri bilir). Alpaca yoksa null → çağıran saat hesabına düşer.
 // Bugün işlem günü mü? (resmî tatiller dahil) true/false | null (Alpaca yok/erişilemedi)
 // GÜN İÇİ MUM (IEX, gerçek zamanlı) — { SYM: [{ts, open, high, low, close, volume}] }. startIso: ISO zaman damgası.
