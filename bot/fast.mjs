@@ -19,6 +19,7 @@ import { sendTG } from "./telegram.mjs";
 import { loadFiles, saveFiles, READ_FAILED } from "./state.mjs";
 import { IDEA_FILES, HORIZON, addIdea, settleIdeas } from "./ideabook.mjs";
 import { macroEvents, nearEvent, fmtNear } from "./macro.mjs";
+import { freshPrice, ageTxt } from "./liveaudit.mjs";
 
 const ETFS = new Set(["SPY", "QQQ", "IWM", "DIA"]);
 export const FAST = {
@@ -128,8 +129,14 @@ export async function scanFast(st, now = Date.now(), toCloseMin = null, opts = {
   // en güçlü (|z|) PER_POLL tanesi kontratla gönderilir, kalanlar aynı mesajda tek satırda anılır (bekleme süresine girerler).
   const cand = [];
   for (const sym of FAST.SYMS) {
-    const sig = detectFast((bars[sym] || []).filter(x => x.ts >= sessStart), live[sym]?.price, ETFS.has(sym));
+    const b = (bars[sym] || []).filter(x => x.ts >= sessStart);
+    // TAZELİK KAPISI: son 1 dk mum ≤ 3 dk önce kapanmış olmalı; canlı fiyat ≤ 2 dk değilse son mum kullanılır.
+    // Bayat veriyle ASLA alarm verilmez (IEX'te işlem seyrekse ya da veri akışı durduysa).
+    const barAge = b.length ? now - b.at(-1).ts - 60e3 : Infinity, lp = freshPrice(live[sym], now, 120e3);
+    if (barAge > 180e3) continue;
+    const sig = detectFast(b, lp, ETFS.has(sym));
     if (!sig) continue;
+    sig.data = `Veri: ${lp ? `Alpaca IEX canlı · fiyat ${ageTxt(now - live[sym].ts)} önce` : alpacaEnabled() ? "son 1 dk mum" : "Yahoo 1 dk (Nasdaq gerçek zamanlı)"} · son mum ${ageTxt(Math.max(0, barAge))} önce kapandı`;
     if (now - (st.cd[sym] || 0) < FAST.COOL_MS) { console.log(`[⚡] ${sym} ${sig.dir} beklemede`); continue; }
     cand.push({ sym, sig });
   }
@@ -144,7 +151,7 @@ export async function scanFast(st, now = Date.now(), toCloseMin = null, opts = {
     const c = await contractIdea({ sym, dir: sig.dir, S: sig.S, stop: sig.stop, target: sig.target, r, today, allow0, timeStop: 30 });
     const title = sig.kind === "burst" ? (sig.dir === "C" ? "⚡ ANİ YÜKSELİŞ" : "⚡ ANİ DÜŞÜŞ") : (sig.dir === "C" ? "↩️ ANİ DÖNÜŞ (dipten)" : "↩️ ANİ DÖNÜŞ (tepeden)");
     const text = [`${title} — ${sym} · ${hh}:${mm} NY · ${fmtTR(new Date(now))} TR`, sig.why,
-      `${sig.dir === "C" ? "🟢 CALL AL" : "🔴 PUT AL"} (yalnız alım)`, ...c.lines,
+      `${sig.dir === "C" ? "🟢 CALL AL" : "🔴 PUT AL"} (yalnız alım)`, ...c.lines, "   " + sig.data,
       ...(fmtNear(nearEvent(opts.ev, now), now) ? ["   " + fmtNear(nearEvent(opts.ev, now), now)] : []),
       ...(i === 0 && rest.length ? [`   Aynı anda: ${rest.map(x => `${x.sym} ${x.sig.dir === "C" ? "↑" : "↓"} ${pctS(x.sig.move)}`).join(" · ")} (piyasa geneli hareket)`] : []),
       "   Not: ani hareket sonrası devam da geri dönüş de olur → küçük pozisyon, stop'a uy. ⚠ Yatırım tavsiyesi değildir."].join("\n");

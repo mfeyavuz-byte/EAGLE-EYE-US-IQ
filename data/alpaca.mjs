@@ -27,7 +27,8 @@ export async function liveQuotes(symbols) {
     if (!j) continue;
     for (const [sym, s] of Object.entries(j)) {
       const p = s?.latestTrade?.p, t = s?.latestTrade?.t;
-      if (typeof p === "number" && p > 0) out[sym] = { price: +p.toFixed(2), ts: Date.parse(t) || Date.now() };
+      // ts: son işlemin zamanı (yoksa null — "şimdi" varsayılmaz; tazelik denetimi yanılmasın) · prev: önceki gün kapanışı
+      if (typeof p === "number" && p > 0) out[sym] = { price: +p.toFixed(2), ts: Date.parse(t) || null, prev: s?.prevDailyBar?.c ?? null };
     }
   }
   return out;

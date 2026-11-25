@@ -127,6 +127,12 @@ Beklenti: Alımda oynaklık primini sen ödersin, orta ölçekli hisselerin opsi
 - **📅 Önemli veri günü uyarısı (`bot/macro.mjs`):** Forex Factory haftalık takvimi (USD, yüksek etki: CPI, istihdam, PCE, GDP…)
   + 2026 FOMC yedeği. Sabah mesajında ve 15 dk fikirlerinde o günün verileri; veriye ±45 dk kala 15 dk fikri ve ani hareket
   alarmlarına "sahte kırılım riski" uyarısı.
+- **🔎 Canlı veri denetimi (`bot/liveaudit.mjs`):** her seans günü ilk taramada (09:35 NY sonrası) ve `/veri` ile: Alpaca IEX
+  son işlem yaşı (SPY/QQQ ≤ 60 sn), 1 dk mum yaşı (≤ 3 dk), Yahoo fiyat yaşı ve Alpaca ile farkı (≤ %0.10), opsiyon zincirinin
+  canlıdan geri kalması (≤ %0.15), canlı VIX vekili (VIXY), tarama kapsamı. Kurallar: zaman damgasız fiyat "canlı" sayılmaz;
+  15 dk fikri 5 dk'dan eski fiyatla, ani hareket alarmı 3 dk'dan eski mumla işlem fikri VERMEZ; opsiyon primi canlı dayanak
+  fiyatına göre yeniden hesaplanır; gün içi VIX skoru canlı VIXY ile (Yahoo ^VIX 15 dk gecikmeli); sabah tahmini açılışı ön piyasa
+  SPY/QQQ canlı fiyatından (ES/NQ vadeli Yahoo'da 10 dk gecikmeli). Her fikir mesajında "Veri: kaynak · yaş" satırı.
 - **⚠ Bot durdu uyarısı:** tarama 45 dk'dan uzun çalışmadıysa (zincir koptuysa) yeniden başladığında süreyi bildirir.
 - **🧭 Faz 7 — kalite + sektör rotasyonu (`bot/edge.mjs`):** 11 sektör ETF'inin 3 aylık getirisi; zayıf 3 sektördeki AL ve
   güçlü 3 sektördeki SAT, zarar eden / nakit yakıp ROE'si negatif / borç/özsermaye > 300 olan AL sıranın sonuna iner ve

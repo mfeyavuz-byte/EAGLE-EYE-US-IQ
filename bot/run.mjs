@@ -36,6 +36,7 @@ import { macroEvents, fmtMacroDay } from "./macro.mjs";
 import { IDEA_FILES, fmtIdeaReport } from "./ideabook.mjs";
 import { rankEdge, fmtSectors } from "./edge.mjs";
 import { newsSentiment, newsTag } from "./news.mjs";
+import { liveAudit, freshPrice } from "./liveaudit.mjs";
 
 const UNI = loadUniverse();
 const SYMS = process.env.SYMBOLS ? process.env.SYMBOLS.split(",").map(s => s.trim().toUpperCase()).filter(Boolean) : UNI.symbols;
@@ -138,6 +139,7 @@ const HELP = [
   "/portfoy — model portföy (sanal, 15 slot; haftalık Cuma, aylık ve 3 aylık rapor otomatik gelir)",
   "/etf — SPY/QQQ kısa vade call/put sinyalinin durumu + ETF karnesi",
   "/sabah — açılış öncesi SPY/QQQ çağrılarının karnesi (mesaj her işlem günü ~08:00–09:30 NY)",
+  "/veri — canlı veri denetimi: her kaynağın yaşı ve uyumu (Alpaca, Yahoo, opsiyon zinciri, VIX)",
   "/fikirkarne — 15 dk SPY/QQQ fikirleri ve ani hareket alarmlarının gerçekleşen sonuçları",
   "/durum — bot durumu",
   "/yardim — bu liste",
@@ -215,6 +217,8 @@ async function morningStep(st, ctx) {
     closesFor: s => completedCloses(s, today),
     vixCloses: () => completedCloses("^VIX", today),
     futQuote: s => quoteNow(s),
+    // Ön piyasa SPY/QQQ: Alpaca IEX CANLI son işlem (≤ 10 dk) — ES/NQ vadeli Yahoo'da 10 dk gecikmeli olduğundan tercih edilir
+    liveNow: async s => { const q = (await liveQuotes([s]).catch(() => ({})))[s]; return freshPrice(q, Date.now(), 10 * 60e3) ? q : null; },
     chainFor: async sym => (chains[sym] ??= await loadChain(sym, r, { minDte: 0, maxDte: 25, targets: [0, 1, 7, 18] })),
     headlines: async () => (await news("SPY", 4)).map(n => n.headline),
     fearGreed: async () => fmtFG(fgNow),
@@ -243,7 +247,7 @@ export function crossProblem(alp, yq, now = Date.now()) {
 // liveMap: { SYM: {price, ts} } · of: taranan hisse sayısı. Sorun: Alpaca açıkken canlı fiyat < %50 ya da
 // medyan yaş > 30 dk (seans içinde). Alpaca kapalıysa kaynak Yahoo (gecikmeli) olarak bildirilir.
 export function dataHealth(liveMap, of, open = true, now = Date.now()) {
-  const ages = Object.values(liveMap || {}).map(q => (now - q.ts) / 60e3).filter(isFinite).sort((a, b) => a - b);
+  const ages = Object.values(liveMap || {}).filter(q => q.ts).map(q => (now - q.ts) / 60e3).filter(isFinite).sort((a, b) => a - b);
   const live = ages.length, med = live ? Math.round(ages[Math.floor(live / 2)]) : null;
   const src = alpacaEnabled() ? "Alpaca (canlı IEX + SIP günlük)" : "Yahoo (gecikmeli, Alpaca anahtarı yok)";
   let problem = null;
@@ -340,6 +344,8 @@ async function handleCommands(st, ivStore, ctx) {
       await sendTG(removeWatch(st, sym) ? `${sym} takipten çıkarıldı.` : `${sym || "?"} takipte değil.`);
     } else if (cmd === "/takiplerim") {
       await sendTG(fmtWatch(st));
+    } else if (cmd === "/veri") {
+      await sendTG((await liveAudit(st)).text);
     } else if (cmd === "/fikirkarne") {
       await sendTG(fmtIdeaReport(ctx.ideas));
     } else if (cmd === "/sabah") {
@@ -489,6 +495,11 @@ export async function main() {
   if (st.data.problem && st.dataWarnDay !== today && isRegularHours()) {
     st.dataWarnDay = today;
     await sendTG(`⚠ VERİ UYARISI — ${st.data.problem}\nSinyaller gecikmeli/eksik fiyatla üretilmiş olabilir. Kaynak: ${st.data.src}.`);
+  }
+  // --- GÜNLÜK CANLI VERİ DENETİMİ (seansın ilk taraması, 09:35 NY sonrası): tüm kaynakların yaşı/uyumu Telegram'a ---
+  if (isRegularHours() && st.auditDay !== today && mins >= 575) {
+    const a = await liveAudit(st).catch(e => ({ text: "🔎 Canlı veri denetimi yapılamadı: " + (e?.message || e) }));
+    if (await sendTG(a.text)) st.auditDay = today;
   }
 
   // --- Spot sinyalleri: aynı gün aynı sinyali tekrar gönderme ---

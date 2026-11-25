@@ -82,8 +82,11 @@ export async function buildMorning(deps) {
     const closes = await deps.closesFor(sym);
     const s = closes && morningScore(closes, vix);
     if (!s) { L.push("", `${sym}: veri alınamadı.`); continue; }
-    const prev = closes.at(-1), estOpen = +(prev * (1 + (fx(sym) ?? 0))).toFixed(2);
-    L.push("", `${sym} · dün $${prev.toFixed(2)} · tahmini açılış ~$${estOpen} · trend ${s.up200 ? "yukarı (200g üstü)" : "aşağı (200g altı)"} · RSI(2) ${s.rsi2.toFixed(1)}`);
+    // Tahmini açılış: ön piyasa CANLI fiyat (Alpaca IEX, ≤ 10 dk) varsa o; yoksa vadeli değişimi (Yahoo, 10 dk gecikmeli)
+    const pm = deps.liveNow ? await deps.liveNow(sym).catch(() => null) : null;
+    const prev = closes.at(-1), estOpen = +(pm?.price > 0 ? pm.price : prev * (1 + (fx(sym) ?? 0))).toFixed(2);
+    const src = pm?.price > 0 ? "ön piyasa canlı" : fx(sym) != null ? "vadeliden, 10 dk gecikmeli" : "dünkü kapanış";
+    L.push("", `${sym} · dün $${prev.toFixed(2)} · tahmini açılış ~$${estOpen} (${src}) · trend ${s.up200 ? "yukarı (200g üstü)" : "aşağı (200g altı)"} · RSI(2) ${s.rsi2.toFixed(1)}`);
     L.push(`Koşullar: ${s.conds.map(c => `${c.ok ? "✓" : "✗"} ${c.txt}`).join(" · ")}`);
     if (s.score === 0) {
       L.push(`⏸ NÖTR — işlem önerilmez. Bu koşullarda gün içi yön geçmişte yazı-tura (isabet %51–54).`);
