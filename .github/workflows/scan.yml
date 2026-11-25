@@ -57,7 +57,7 @@ jobs:
           FORCE: ${{ inputs.force && '1' || '' }}
         run: |
           set +e
-          if [ -n "$FORCE" ]; then   # yalnız "force" (piyasa kapalıyken test): tek tarama + tek 15 dk fikri, zincir yok
+          if [ -n "$FORCE" ]; then   # "force" (piyasa kapalıyken test): tek tarama + tek 15 dk fikri; ardından zincir yine başlar
             node bot/run.mjs; rc=$?
             node bot/idx15.mjs
             echo "Zorla test — tek run (çıkış $rc)."
@@ -86,7 +86,8 @@ jobs:
           exit 0
       - name: Zinciri sürdür (sonraki çalışmayı başlat)
         # Testler bozuksa (döngü atlandı) zincir DURUR → hata alarmı gelir; hızlı başarısız-yeniden-başla döngüsü olmaz.
-        if: ${{ always() && !inputs.force && steps.loop.outcome == 'success' }}
+        # "force" işaretli test çalışması da zinciri başlatır (sonraki çalışma force'suz, normal döngüdür).
+        if: ${{ always() && steps.loop.outcome == 'success' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
