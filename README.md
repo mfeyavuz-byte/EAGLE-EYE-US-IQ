@@ -154,8 +154,11 @@ Beklenti: Alımda oynaklık primini sen ödersin, orta ölçekli hisselerin opsi
   günlük SPY'a göre getiriyi ölçer; anlamlı çıkarsa kurala eklenir.
 - **💎 Değer (ucuz hisse) portföyü (`bot/value.mjs`) — $100.000:** S&P 500 + ≥ $10 milyar Nasdaq, fiyat ≥ $10.
   Kalite kapıları (değer tuzağına karşı): kârlı (EPS > 0, marj > %5, özsermaye kârlılığı > %8), borç/özsermaye < 200,
-  serbest nakit akışı > 0, bot SAT demiyor, 52h zirvenin ≥ %60'ı. Ucuzluk puanı: 1/FK, 1/ileri FK, 1/PDDD,
-  1/(FD/FAVÖK), FCF verimi (evren içi yüzdelik ortalaması). En ucuz 10 (sektör başına ≤ 2), eşit ağırlık; **aylık**
+  serbest nakit akışı > 0, bot SAT demiyor, 52h zirvenin ≥ %60'ı; ileri F/K 0–40, ileri F/K ≤ 1.15 × F/K (kâr erimesi
+  beklenmiyor) ve ≥ 0.5 × F/K (bölünme sonrası bozuk tahmin = veri hatası). **ABD'ye göre ucuzluk — ana ölçü İLERİ F/K:**
+  her ölçü KENDİ SEKTÖRÜ içinde yüzdeliklenir (ABD'de sektör F/K'ları çok farklı; ≥ 6 aday yoksa evrenle). Ağırlıklar:
+  1/ileri F/K %50 · FCF verimi %15 · 1/(FD/FAVÖK) %15 · 1/F/K %10 · 1/PD/DD %10. Ön eleme de sektör içi ileri F/K'ya göre
+  (her sektörün en ucuzları, 80 aday). En ucuz 10 (sektör başına ≤ 2; aynı sektörün farklı adları birleşik), eşit ağırlık; **aylık**
   yeniden dengeleme (yeni ayın ilk işlem günü). Haftalık / aylık / 3 aylık raporlarda ve `/portfoy`'da.
   ⚠ Geçmiş temel veriler ücretsiz olmadığı için **geriye dönük test edilemedi** → canlı karne (SPY'a göre) ile ölçülür.
 - **Alpaca paper (isteğe bağlı):** Variables → `PAPER_TRADE` = `1` → aynı AL'leri Alpaca **paper** hesabında braket

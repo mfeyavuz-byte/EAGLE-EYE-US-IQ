@@ -309,3 +309,23 @@ test("değer (ucuz hisse) portföyü: kalite kapıları, veri hatası, sektör s
   assert.ok(st.ret > 0.09 && Math.abs(st.spyRet - 0.02) < 1e-9);
   assert.match(V.fmtValue(v, st, "T"), /getiri \+/);
 });
+
+test("değer: ABD — ileri F/K ana ölçü, sektör içi kıyas, değer tuzağı kapısı", async () => {
+  const V = await import("../bot/value.mjs");
+  const good = { margin: 0.15, roe: 0.2, de: 50, fcf: 1e9, evEbitda: 10 };
+  const row = (sym, sec, fpe, pe = fpe * 1.05, extra = {}) => ({ sym, sec, price: 50, pe, fpe, pb: 3, eps: 3, mcap: 2e10, q: { ...good }, hi52: 0.8, pick: null, ...extra });
+  // Teknoloji ileri F/K 20–32, enerji 8–14: sektör içi kıyasla her iki sektörün en ucuzu en üstte olmalı
+  const tech = [20, 22, 24, 26, 28, 30, 32].map((f, i) => row("T" + i, i % 2 ? "Technology" : "Information Technology", f));
+  const en = [8, 9, 10, 11, 12, 13, 14].map((f, i) => row("E" + i, "Energy", f));
+  const r = V.rankValue([...tech, ...en,
+    row("TRAP", "Energy", 7, 4),                     // ileri F/K 7 ama izleyen 4 → kazanç düşüşü bekleniyor → elenir
+    row("NOFWD", "Energy", -5, 6),                   // ileri kazanç negatif → elenir
+    row("PRICY", "Technology", 45, 50),              // ileri F/K > 40 → elenir
+    row("SPLIT", "Energy", 5, 25)]);                 // ileri F/K izleyenin 1/5'i → veri hatası (bölünme) → elenir
+  const top2 = r.slice(0, 2).map(x => x.sym).sort();
+  assert.deepEqual(top2, ["E0", "T0"]);
+  assert.ok(!r.some(x => ["TRAP", "NOFWD", "PRICY", "SPLIT"].includes(x.sym)));
+  assert.equal(r.find(x => x.sym === "T0").grp, "TECH");                     // iki teknoloji adı tek grup
+  const picks = V.pickValue(r, 10, 2);
+  assert.equal(picks.filter(p => V.secKey(p.sec) === "TECH").length, 2);    // sektör sınırı birleşik ada uygulanır
+});

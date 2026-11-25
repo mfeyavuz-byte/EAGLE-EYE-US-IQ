@@ -23,7 +23,7 @@ import { aiComments, aiItem, AI_MODEL } from "./ai.mjs";
 import { analyzeOptions, OCFG, setEdges } from "../options/engine.mjs";
 import { calibrate, fmtCalib } from "./calib.mjs";
 import { initModel, stepModel, equity, fmtModel, dueReports, prevMonthEnd, prevQuarterEnd, shiftDays, MCFG, periodStats } from "./model.mjs";
-import { rankValue, pickValue, initValue, rebalanceValue, snapValue, fmtValueTrades, fmtValue, VCFG } from "./value.mjs";
+import { rankValue, pickValue, initValue, rebalanceValue, snapValue, fmtValueTrades, fmtValue, VCFG, secKey } from "./value.mjs";
 import { initOptModel, queue, enterPending, markAndExit, fmtOptModel, fmtOptTrades } from "./optmodel.mjs";
 import { runEtf, fmtEtfBook, fmtEtfState, ETF_OPT } from "./etf.mjs";
 import { etfState, ETFS_FAST } from "../spot/etfsignal.mjs";
@@ -204,10 +204,12 @@ async function valueStep(st, today, mins, all, spyPx) {
     const byS = new Map(all.map(a => [a.sym, a]));
     const cands = UNI.symbols.filter(s => { const m = UNI.meta?.[s]; return byS.has(s) && (m?.idx === "SP500" || (m?.mcapB ?? 0) * 1e9 >= VCFG.MIN_MCAP_NQ); });
     const vq = await valuationQuotes(cands);
-    // Ön eleme (yalnız değerleme): kârlı ve fiyatı ≥ $10 olanlar içinde kazanç/defter verimine göre ilk 60 → kalite verisi
-    const pre = cands.map(s => ({ sym: s, ...vq[s] })).filter(r => r.price >= 10 && r.eps > 0)
-      .map(r => ({ ...r, pre: (r.pe > 0 ? 1 / r.pe : 0) + (r.fpe > 0 ? 1 / r.fpe : 0) + (r.pb >= 0.1 ? 0.2 / r.pb : 0) }))
-      .sort((a, b) => b.pre - a.pre).slice(0, 60);
+    // Ön eleme: İLERİ F/K'ya göre, SEKTÖR İÇİ sıra (ABD'de sektör F/K'ları çok farklı) → her sektörün en ucuzları, toplam 80
+    const base = cands.map(s => ({ sym: s, ...vq[s], sec: UNI.meta?.[s]?.sec })).filter(r => r.price >= 10 && r.eps > 0 && r.fpe > 0 && r.fpe <= VCFG.MAX_FPE);
+    const bySec = {};
+    for (const r of base) (bySec[secKey(r.sec)] ||= []).push(r);
+    for (const list of Object.values(bySec)) { list.sort((a, b) => a.fpe - b.fpe); list.forEach((r, i) => { r.pre = list.length > 1 ? 1 - i / (list.length - 1) : 1; }); }
+    const pre = base.sort((a, b) => b.pre - a.pre || a.fpe - b.fpe).slice(0, 80);
     const rows = [];
     for (const r of pre) {
       const a = byS.get(r.sym);
