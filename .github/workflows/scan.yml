@@ -53,6 +53,8 @@ jobs:
           ALPACA_KEY_ID: ${{ secrets.ALPACA_KEY_ID }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
           PAPER_TRADE: ${{ vars.PAPER_TRADE }}
+          PAPER_OPT: ${{ vars.PAPER_OPT }}               # sanal opsiyon işlemi: boş = AÇIK, 0 = kapalı (yalnız paper-api)
+          OPT_PAPER_BUDGET: ${{ vars.OPT_PAPER_BUDGET }} # fikir başına sanal bütçe (boş = $1.000)
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           AI_MODEL: ${{ vars.AI_MODEL }}
           FORCE: ${{ inputs.force && '1' || '' }}

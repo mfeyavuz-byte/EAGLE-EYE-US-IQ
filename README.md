@@ -127,6 +127,18 @@ Beklenti: Alımda oynaklık primini sen ödersin, orta ölçekli hisselerin opsi
 - **📅 Önemli veri günü uyarısı (`bot/macro.mjs`):** Forex Factory haftalık takvimi (USD, yüksek etki: CPI, istihdam, PCE, GDP…)
   + 2026 FOMC yedeği. Sabah mesajında ve 15 dk fikirlerinde o günün verileri; veriye ±45 dk kala 15 dk fikri ve ani hareket
   alarmlarına "sahte kırılım riski" uyarısı.
+- **🚪 Çıkış mesajları (`bot/exits.mjs`):** 15 dk fikirleri ve ani hareket alarmları ~30 sn'de bir canlı izlenir; STOP
+  (hedefle aynı anda gelirse STOP), HEDEF, ZAMAN STOPU (0DTE 45 dk, diğer 90 dk, ani hareket 30 dk) ya da seans bitimine ≤ 5 dk
+  → fikir başına TEK "POZİSYONU KAPAT" mesajı (dayanak, R sonucu, opsiyonun tahmini değeri). Gönderilen çıkışlar Gist'te tutulur.
+- **🧾 Alpaca sanal opsiyon işlemi (`bot/optpaper.mjs`):** fikirler paper hesapta piyasa emriyle ALINIR, çıkışta SATILIR (açığa
+  satış yok; uç nokta sabit paper-api). Fikir başına $1.000 (`OPT_PAPER_BUDGET`); kapatmak için repo değişkeni `PAPER_OPT=0`.
+  Haftalık rapor ve `/fikirkarne`: GERÇEK dolumlarla işlem sayısı, kazanan oranı, ortalama getiri, net K/Z.
+- **🎚 Karneye göre eşik ayarı (`bot/tune.mjs`):** günde 1; ≥ 40 sonuçlanmış fikirden sonra 15 dk skor eşiği (3→4.5) ve ani hareket
+  σ eşiği (3.5→5) yalnız SIKIYA doğru, ortalaması pozitif ve ≥ 20 fikri olan en düşük eşik seçilir; değişince Telegram'a bildirilir.
+- **🎯 Bilanço straddle (`bot/earnings.mjs`):** her gün 15:00–15:50 NY: bugün kapanış sonrası / yarın açılış öncesi açıklayan
+  ≥ $20 milyar hisselerde ATM call + put (yalnız alım). Fiyatlanan hareket ≤ 0.8 × son 4 bilançonun ortalama tepkisi ise
+  "STRADDLE AL" (paper'da da alınır), tepki günü 10:00 NY'de çıkış mesajı. Takvim: Nasdaq (saat yoksa Yahoo). Geriye dönük
+  test: Actions → "Bilanço straddle testi" (`research/earnings.mjs`, Alpaca geçmiş opsiyon fiyatları, 2024-03 sonrası).
 - **🔎 Canlı veri denetimi (`bot/liveaudit.mjs`):** her seans günü ilk taramada (09:35 NY sonrası) ve `/veri` ile: Alpaca IEX
   son işlem yaşı (SPY/QQQ ≤ 60 sn), 1 dk mum yaşı (≤ 3 dk), Yahoo fiyat yaşı ve Alpaca ile farkı (≤ %0.10), opsiyon zincirinin
   canlıdan geri kalması (≤ %0.15), canlı VIX vekili (VIXY), tarama kapsamı. Kurallar: zaman damgasız fiyat "canlı" sayılmaz;

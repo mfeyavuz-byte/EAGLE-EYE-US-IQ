@@ -17,6 +17,9 @@ import { loadFiles, saveFiles, READ_FAILED } from "./state.mjs";
 import { IDEA_FILES, HORIZON, addIdea, settleIdeas, ideaStats, fmtIdeaStats } from "./ideabook.mjs";
 import { macroEvents, fmtMacroDay, nearEvent, fmtNear } from "./macro.mjs";
 import { freshPrice, ageTxt, FRESH_MS } from "./liveaudit.mjs";
+import { paperBuy } from "./optpaper.mjs";
+import { TUNE_FILE, tunedValue } from "./tune.mjs";
+import { pushOpenLocal, ideaId } from "./exits.mjs";
 
 export const IDX = { SYMS: ["SPY", "QQQ"], START: 585, END: 950, ODTE_UNTIL: 870, MIN_SCORE: 3, R_ATR: 1.5, R_MIN: 0.0015, RR: 2, SLIP: 0.3, MAX_SPREAD: 0.15 };
 const YR = 365 * 864e5;
@@ -119,7 +122,7 @@ async function oneSymbol(sym, ctx) {
   const c = await contractIdea({ sym, dir: sig.dir, S, stop: sig.stop, target: sig.target, r, today, allow0: mins < IDX.ODTE_UNTIL });
   const lab = sig.dir === "C" ? "🟢 CALL AL" : "🔴 PUT AL";
   const L = [head, dataLine, `${lab} — skor ${sig.score >= 0 ? "+" : ""}${sig.score} · ${sig.why.join(" · ")}`, ...c.lines];
-  return { sym, sig, pick: c.pick, text: L.join("\n") };
+  return { sym, sig, pick: c.pick, expD: c.expD, text: L.join("\n") };
 }
 
 // ORTAK KONTRAT FİKRİ (15 dk fikri + ani hareket alarmı): yön + dayanak seviyeleri → likit kontrat, prim, opsiyonun stop/hedef
@@ -193,8 +196,9 @@ async function main() {
     if (!(await isMarketOpen())) { console.log("[15dk] piyasa kapalı (tatil)."); return 3; }
   }
   // Canlı karne: kendi Gist dosyası (okunamazsa karne bu sefer atlanır, fikir yine gönderilir)
-  const files = await loadFiles([IDEA_FILES.idx]);
+  const files = await loadFiles([IDEA_FILES.idx, TUNE_FILE]);
   const book = files === READ_FAILED ? null : files[IDEA_FILES.idx];
+  if (files !== READ_FAILED) IDX.MIN_SCORE = tunedValue(files[TUNE_FILE], "idx");     // karneye göre eşik (yoksa varsayılan 3)
   const today = nyParts().date, pre = [];
   if (book) {
     await settleIdeas(book, s => fetchChart(s, "1m", "5d")).catch(e => console.error("[15dk] karne:", e?.message || e));
@@ -209,11 +213,21 @@ async function main() {
   const { text, parts } = await buildIdx15(new Date(), { ev, pre });
   const ok = await sendTG(text);
   console.log(`[15dk] SPY/QQQ fikri ${ok ? "gönderildi" : "GÖNDERİLEMEDİ"}.`);
-  if (ok && book) {
+  if (ok) {                                                       // karne defteri okunamasa da çıkış takibi + sanal emir çalışır
     const now = Date.now();
-    for (const p of parts) if (p.sig?.dir) addIdea(book, { src: "idx", sym: p.sym, dir: p.sig.dir, ts: now, S: p.sig.S, stop: p.sig.stop, target: p.sig.target, hor: HORIZON.idx, score: p.sig.score });
-    book.lastDay = today; book.lastTs = now;
-    await saveFiles({ [IDEA_FILES.idx]: book });
+    const fresh = [];
+    for (const p of parts) {
+      if (!p.sig?.dir) continue;
+      const it = { src: "idx", sym: p.sym, dir: p.sig.dir, ts: now, S: p.sig.S, stop: p.sig.stop, target: p.sig.target, hor: HORIZON.idx,
+        score: Math.abs(p.sig.score), tstop: p.expD === today ? 45 : 90,
+        ...(p.pick ? { occ: p.pick.sym, K: p.pick.K, exp: p.expD, prem: p.pick.prem, iv: +p.pick.iv.toFixed(4) } : {}) };
+      it.id = ideaId(it);
+      if (it.occ) it.paper = await paperBuy(it.occ, it.prem, it.id).catch(() => null);   // sanal hesapta gerçek emir
+      if (book) addIdea(book, it);
+      fresh.push(it);
+    }
+    pushOpenLocal(fresh, now);                                    // çıkış takibi (ani hareket süreci okur)
+    if (book) { book.lastDay = today; book.lastTs = now; await saveFiles({ [IDEA_FILES.idx]: book }); }
   }
   return ok ? 0 : 1;
 }

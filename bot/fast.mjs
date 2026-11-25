@@ -20,6 +20,9 @@ import { loadFiles, saveFiles, READ_FAILED } from "./state.mjs";
 import { IDEA_FILES, HORIZON, addIdea, settleIdeas } from "./ideabook.mjs";
 import { macroEvents, nearEvent, fmtNear } from "./macro.mjs";
 import { freshPrice, ageTxt } from "./liveaudit.mjs";
+import { paperBuy, paperClose } from "./optpaper.mjs";
+import { TUNE_FILE, tunedValue } from "./tune.mjs";
+import { pushOpenLocal, readOpenLocal, ideaId, checkExit, optValue, fmtExit } from "./exits.mjs";
 
 const ETFS = new Set(["SPY", "QQQ", "IWM", "DIA"]);
 export const FAST = {
@@ -157,11 +160,45 @@ export async function scanFast(st, now = Date.now(), toCloseMin = null, opts = {
       "   Not: ani hareket sonrası devam da geri dönüş de olur → küçük pozisyon, stop'a uy. ⚠ Yatırım tavsiyesi değildir."].join("\n");
     if (await sendTG(text)) {
       st.cd[sym] = now; st.n++; sent++;
-      if (opts.book) addIdea(opts.book, { src: "fast", sym, dir: sig.dir, kind: sig.kind, ts: now, S: sig.S, stop: sig.stop, target: sig.target, hor: HORIZON.fast, z: sig.z });
+      const it = { src: "fast", sym, dir: sig.dir, kind: sig.kind, ts: now, S: sig.S, stop: sig.stop, target: sig.target, hor: HORIZON.fast,
+        z: Math.abs(sig.z), tstop: 30, ...(c.pick ? { occ: c.pick.sym, K: c.pick.K, exp: c.expD, prem: c.pick.prem, iv: +c.pick.iv.toFixed(4) } : {}) };
+      it.id = ideaId(it);
+      if (it.occ) it.paper = await paperBuy(it.occ, it.prem, it.id).catch(() => null);   // sanal hesapta gerçek emir
+      if (opts.book) addIdea(opts.book, it);
+      pushOpenLocal([it], now);                                                          // çıkış takibi
       if (i === 0) for (const x of rest) st.cd[x.sym] = now;
       console.log(`[⚡] ${sym} ${sig.dir} gönderildi (${sig.kind}, z ${sig.z})`);
     }
   }
+  return sent;
+}
+
+// ÇIKIŞ TAKİBİ: açık fikirler (15 dk + ani hareket) → STOP / HEDEF / ZAMAN / KAPANIŞ mesajı (fikir başına bir kez)
+export async function monitorExits(st, book, now = Date.now(), toCloseMin = 999) {
+  const done = { ...(book?.exits || {}), ...(st.exits || {}) };
+  const open = readOpenLocal().filter(it => it.id && !done[it.id] && now - it.ts < 6 * 3600e3 && now > it.ts);
+  if (!open.length) return 0;
+  const syms = [...new Set(open.map(x => x.sym))];
+  const live = alpacaEnabled() ? await liveQuotes(syms).catch(() => ({})) : {};
+  let sent = 0;
+  for (const it of open) {
+    let bars = cache.bars[it.sym];
+    if (!bars?.length && !alpacaEnabled()) bars = await fetchChart(it.sym, "1m", "1d").catch(() => []);
+    const after = (bars || []).filter(b => b.ts >= it.ts);                   // yalnız fikirden SONRA başlayan mumlar
+    const px = freshPrice(live[it.sym], now, 120e3) ?? after.at(-1)?.close;
+    if (!px) continue;
+    const ex = checkExit(it, { px, hi: after.length ? Math.max(...after.map(b => b.high)) : null, lo: after.length ? Math.min(...after.map(b => b.low)) : null, now, toCloseMin });
+    if (!ex) continue;
+    const closed = it.paper ? !!(await paperClose(it.occ).catch(() => null)) : false;
+    const val = it.exp ? optValue(it, ex.px, now, nyTs(it.exp, 16, 0)) : null;
+    if (await sendTG(fmtExit(it, ex, val, closed))) {
+      (st.exits ||= {})[it.id] = now;
+      if (book) (book.exits ||= {})[it.id] = now;
+      sent++;
+      console.log(`[çıkış] ${it.id} ${ex.why}`);
+    }
+  }
+  for (const o of [st.exits, book?.exits]) if (o) for (const [k, t] of Object.entries(o)) if (now - t > 3 * 864e5) delete o[k];
   return sent;
 }
 
@@ -176,7 +213,10 @@ async function main() {
       // Karne defteri (kendi Gist dosyası): okunamazsa 10 dk sonra tekrar; ufku dolanlar 10 dk'da bir sonuçlandırılır
       if (Date.now() - bookAt > 10 * 60e3) {
         bookAt = Date.now();
-        if (!book) { const f = await loadFiles([IDEA_FILES.fast]).catch(() => READ_FAILED); if (f !== READ_FAILED) book = f[IDEA_FILES.fast]; }
+        {                                                       // 10 dk'da bir: eşik dosyası (+ defter ilk kez)
+          const f = await loadFiles(book ? [TUNE_FILE] : [IDEA_FILES.fast, TUNE_FILE]).catch(() => READ_FAILED);
+          if (f !== READ_FAILED) { if (!book) book = f[IDEA_FILES.fast]; FAST.Z_BURST = tunedValue(f[TUNE_FILE], "fast"); }   // karneye göre σ eşiği
+        }
         if (book && await settleIdeas(book, s => fetchChart(s, "1m", "5d")).catch(() => false)) await saveFiles({ [IDEA_FILES.fast]: book });
       }
       if (Date.now() - evAt > 30 * 60e3) { ev = await macroEvents().catch(() => []); evAt = Date.now(); }
@@ -189,6 +229,10 @@ async function main() {
         saveSt(st);
       }
       else if (once) console.log("[⚡] seans dışı.");
+      if (open || process.env.FORCE === "1") {
+        if (await monitorExits(st, book, Date.now(), toClose).catch(e => { console.error("[çıkış]", e?.message || e); return 0; }) && book) await saveFiles({ [IDEA_FILES.fast]: book });
+        saveSt(st);
+      }
     } catch (e) { console.error("[⚡] hata:", e?.message || e); }
     if (once) break;
     await sleep(FAST.POLL);

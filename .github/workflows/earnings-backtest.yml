@@ -1,0 +1,36 @@
+name: Bilanço straddle testi
+
+# Elle çalıştırılır. Bilanço öncesi ATM call + put alımı → tepki günü satış; gerçek geçmiş opsiyon fiyatları (Alpaca).
+# Sonuç: Telegram + iş özeti.
+on:
+  workflow_dispatch:
+    inputs:
+      start:
+        description: "Başlangıç (YYYY-AA-GG, en erken 2024-02)"
+        default: "2024-03-01"
+
+jobs:
+  earnings:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+      - name: Bilanço straddle testi
+        env:
+          ALPACA_KEY_ID: ${{ secrets.ALPACA_KEY_ID }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          ER_START: ${{ inputs.start }}
+        run: |
+          set -o pipefail
+          node research/earnings.mjs | tee out.txt
+          { echo '```'; sed -n '/^SONUÇ/,$p' out.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Sonucu Telegram'a gönder
+        if: always()
+        env:
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CHAT: ${{ secrets.TG_CHAT }}
+          BT_INFO: "Bilanço straddle · ${{ inputs.start }} sonrası · commit ${{ github.sha }}"
+        run: node options/send-report.mjs out.txt

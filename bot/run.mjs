@@ -37,6 +37,56 @@ import { IDEA_FILES, fmtIdeaReport } from "./ideabook.mjs";
 import { rankEdge, fmtSectors } from "./edge.mjs";
 import { newsSentiment, newsTag } from "./news.mjs";
 import { liveAudit, freshPrice } from "./liveaudit.mjs";
+import { paperOptReport } from "./optpaper.mjs";
+import { tuneAll, fmtTune, TUNE_FILE } from "./tune.mjs";
+import { paperBuy, paperClose, paperQty, paperUnwind } from "./optpaper.mjs";
+import { buildEarnings, straddleValue, fmtEarnBook, ER } from "./earnings.mjs";
+import { earningsOn, reportDates } from "../data/nasdaq.mjs";
+// Haftalık rapor eki: sanal opsiyon hesabı (gerçek dolumlar, 7 gün) + eşik ayarı durumu
+async function weeklyIdeaExtras(st) {
+  const pr = await paperOptReport(7).catch(() => null);
+  return (pr ? "\n" + pr : "") + (st.tune ? "\n" + fmtTune(st.tune) : "") + "\n" + fmtEarnBook(st.earn?.closed);
+}
+async function nextTradingDay(today) {
+  for (let k = 1; k <= 6; k++) {
+    const d = shiftDays(today, k), wd = new Date(d + "T12:00:00Z").getUTCDay();
+    if (wd === 0 || wd === 6) continue;
+    if ((await isTradingDay(d).catch(() => null)) !== false) return d;
+  }
+  return shiftDays(today, 1);
+}
+async function earningsStep(st, today, mins) {
+  st.earn ||= { day: null, open: [], closed: [] };
+  // Çıkış: tepki günü 10:00 NY sonrası → iki bacağı sat
+  for (let i = st.earn.open.length - 1; i >= 0; i--) {
+    const x = st.earn.open[i];
+    if (x.reactD > today || (x.reactD === today && mins < ER.EXIT_MIN)) continue;
+    const ch = await optionChain(x.sym, x.expTs).catch(() => null);
+    const val = straddleValue(ch, x.occC, x.occP);
+    if (val == null && x.reactD === today) continue;                          // kotasyon yok → sonraki çalıştırmada tekrar
+    if (x.paper) { await paperClose(x.occC).catch(() => null); await paperClose(x.occP).catch(() => null); }
+    const ret = val != null ? val / x.cost - 1 : null;
+    if (await sendTG(`🎯 BİLANÇO STRADDLE ÇIKIŞ — ${x.sym} ${x.K}C + ${x.K}P → İKİ BACAĞI SAT\nGiriş ~${x.cost} · şimdi ~${val != null ? val.toFixed(2) : "—"} · ${ret != null ? (ret >= 0 ? "+" : "") + (ret * 100).toFixed(0) + "%" : "kotasyon yok"}${x.paper ? "\n🧾 Sanal (paper) pozisyon kapatıldı." : ""}`)) {
+      st.earn.open.splice(i, 1);
+      if (ret != null) st.earn.closed.push({ sym: x.sym, d: x.d, ret: +ret.toFixed(4), ratio: x.ratio });
+      if (st.earn.closed.length > 300) st.earn.closed.splice(0, st.earn.closed.length - 300);
+    }
+  }
+  // Giriş: günde 1, 15:00–15:50 NY
+  if (st.earn.day === today || mins < 900 || mins >= 950) return;
+  const nextDay = await nextTradingDay(today);
+  const { text, buys } = await buildEarnings(today, nextDay, { earningsOn, reportDates, optionChain, fetchDaily, inUniverse: s => SYMS.includes(s) });
+  if (!(await sendTG(text))) return;
+  st.earn.day = today;
+  for (const b of buys) {
+    const id = `earn-${b.sym}-${today}`;
+    const q = paperQty(b.cost);                                                // iki bacak aynı adet; maliyet = straddle
+    const pc = q ? await paperBuy(b.occC, b.cMid, id + "-C", q).catch(() => null) : null;
+    const pp = pc ? await paperBuy(b.occP, b.pMid, id + "-P", q).catch(() => null) : null;
+    if (pc && !pp) await paperUnwind(pc, b.occC).catch(() => null);         // tek bacak kalmasın
+    st.earn.open.push({ sym: b.sym, d: today, reactD: b.reactD, K: b.K, occC: b.occC, occP: b.occP, expTs: b.expTs, cost: b.cost, ratio: +b.ratio.toFixed(2), paper: !!(pc && pp) });
+  }
+}
 
 const UNI = loadUniverse();
 const SYMS = process.env.SYMBOLS ? process.env.SYMBOLS.split(",").map(s => s.trim().toUpperCase()).filter(Boolean) : UNI.symbols;
@@ -347,7 +397,8 @@ async function handleCommands(st, ivStore, ctx) {
     } else if (cmd === "/veri") {
       await sendTG((await liveAudit(st)).text);
     } else if (cmd === "/fikirkarne") {
-      await sendTG(fmtIdeaReport(ctx.ideas));
+      const pr = await paperOptReport(30).catch(() => null);
+      await sendTG(fmtIdeaReport(ctx.ideas) + (pr ? "\n" + pr : "") + (st.tune ? "\n" + fmtTune(st.tune) : "") + "\n" + fmtEarnBook(st.earn?.closed));
     } else if (cmd === "/sabah") {
       await sendTG(fmtMorningBook(st.morning?.book) + (st.morning?.day ? `\nSon sabah mesajı: ${st.morning.day}` : ""));
     } else if (cmd === "/etf") {
@@ -495,6 +546,17 @@ export async function main() {
   if (st.data.problem && st.dataWarnDay !== today && isRegularHours()) {
     st.dataWarnDay = today;
     await sendTG(`⚠ VERİ UYARISI — ${st.data.problem}\nSinyaller gecikmeli/eksik fiyatla üretilmiş olabilir. Kaynak: ${st.data.src}.`);
+  }
+  // --- BİLANÇO STRADDLE: giriş 15:00–15:50 NY (günde 1), çıkış tepki günü 10:00 NY sonrası ---
+  await earningsStep(st, today, mins).catch(e => console.error("[Bilanço]", e?.message || e));
+
+  // --- EŞİK AYARI (günde 1): karneye göre 15 dk skor ve ani hareket σ eşiği → abd_tune.json (süreçler okur) ---
+  if (st.tune?.d !== today) {
+    const prev = st.tune, t = tuneAll(ideaBooks, today);
+    if (!gistEnabled() || await saveFiles({ [TUNE_FILE]: { idx: t.idx.value, fast: t.fast.value, d: today } })) {
+      st.tune = t;
+      if (prev && (prev.idx?.value !== t.idx.value || prev.fast?.value !== t.fast.value)) await sendTG("🎚 EŞİK DEĞİŞTİ\n" + fmtTune(t));
+    }
   }
   // --- GÜNLÜK CANLI VERİ DENETİMİ (seansın ilk taraması, 09:35 NY sonrası): tüm kaynakların yaşı/uyumu Telegram'a ---
   if (isRegularHours() && st.auditDay !== today && mins >= 575) {
@@ -657,7 +719,7 @@ export async function main() {
   const { wd } = nyParts();
   if ((wd === "Fri" && mins >= 930 && st.lastWeekly !== today) || process.env.WEEKLY_FORCE === "1") {
     st.lastWeekly = today;
-    await sendTG(weeklyReport(st, today, await paperSummary(st), fmtIdeaReport(ideaBooks)));
+    await sendTG(weeklyReport(st, today, await paperSummary(st), fmtIdeaReport(ideaBooks) + await weeklyIdeaExtras(st)));
     if (st.model) {
       const px = new Map(all.map(a => [a.sym, a.price]));
       await sendTG(fmtModel(st.model, `📊 MODEL PORTFÖY — HAFTALIK RAPOR (${today})`, shiftDays(today, -7), s => px.get(s)) + "\n\n" + fmtOptModel(st.om, shiftDays(today, -7)) + "\n\n" + fmtValue(st.vmodel, st.vmodel && periodStats(st.vmodel, shiftDays(today, -7)), "💎 DEĞER (UCUZ HİSSE) PORTFÖYÜ — haftalık"));
