@@ -6,7 +6,7 @@
 // Olasılık DÜRÜST verilir: kaymasız fiyatta hedefin stoptan önce gelme olasılığı R/(R+2R) = %33; vadede kâr olasılığı log-normal.
 // ⚠ Geriye dönük test edilmedi (ücretsiz geçmiş gün içi opsiyon verisi yok) → yalnız fikirdir.
 import { pathToFileURL } from "node:url";
-import { nyParts, isMarketOpen, isRegularHours, fmtTR } from "../data/market.mjs";
+import { nyParts, isMarketOpen, isRegularHours, fmtTR, nyTs, closeTsOf } from "../data/market.mjs";
 import { intradayBars, liveQuotes, alpacaEnabled } from "../data/alpaca.mjs";
 import { fetchChart, fetchDaily, quoteNow, optionChain, riskFreeRate } from "../data/yahoo.mjs";
 import { bs, impliedVol } from "../options/bs.mjs";
@@ -17,22 +17,16 @@ import { loadFiles, saveFiles, READ_FAILED } from "./state.mjs";
 import { IDEA_FILES, HORIZON, addIdea, settleIdeas, ideaStats, fmtIdeaStats } from "./ideabook.mjs";
 import { macroEvents, fmtMacroDay, nearEvent, fmtNear } from "./macro.mjs";
 import { freshPrice, ageTxt, FRESH_MS } from "./liveaudit.mjs";
-import { paperBuy } from "./optpaper.mjs";
+import { paperBuy, warnPaperFail } from "./optpaper.mjs";
 import { TUNE_FILE, tunedValue } from "./tune.mjs";
 import { pushOpenLocal, ideaId } from "./exits.mjs";
 
 export const IDX = { SYMS: ["SPY", "QQQ"], START: 585, END: 950, ODTE_UNTIL: 870, MIN_SCORE: 3, R_ATR: 1.5, R_MIN: 0.0015, RR: 2, SLIP: 0.3, MAX_SPREAD: 0.15 };
 const YR = 365 * 864e5;
 
-// New York saatiyle dateIso günü h:m → UTC ms (yaz/kış saati otomatik)
-export function nyTs(dateIso, h, m) {
-  const [y, mo, d] = dateIso.split("-").map(Number);
-  for (const off of [4, 5]) {
-    const t = Date.UTC(y, mo - 1, d, h + off, m), p = nyParts(new Date(t));
-    if (p.date === dateIso && p.mins === h * 60 + m) return t;
-  }
-  return Date.UTC(y, mo - 1, d, h + 5, m);
-}
+export { nyTs };                                                   // (data/market.mjs'e taşındı; eski içe aktarımlar için)
+// Zaman stopu (dk): taban süre, ama kapanışa en geç 5 dk kala biter (erken kapanış günleri dahil)
+export const capStop = (base, closeMs, now = Date.now()) => Math.max(5, Math.min(base, Math.floor((closeMs - now) / 60e3) - 5));
 
 const ema = (xs, n) => { const k = 2 / (n + 1); let e = xs[0]; for (let i = 1; i < xs.length; i++) e = xs[i] * k + e * (1 - k); return e; };
 function rsi(xs, n = 14) {
@@ -119,22 +113,26 @@ async function oneSymbol(sym, ctx) {
   if (!sig.dir) return { sym, sig, text: `${head}\n${dataLine}\n⚪ NÖTR (skor ${sig.score >= 0 ? "+" : ""}${sig.score}) — net yön yok → işlem yok, bekle.${sig.why.length ? `\n   ${sig.why.join(" · ")}` : ""}` };
 
   // Vade: 14:30 NY'ye kadar 0DTE, sonrası sonraki vade (son saatlerde 0DTE zaman kaybı çok sert)
-  const c = await contractIdea({ sym, dir: sig.dir, S, stop: sig.stop, target: sig.target, r, today, allow0: mins < IDX.ODTE_UNTIL });
+  // 0DTE yalnız kapanışa > 90 dk varken (erken kapanış günü 13:00 NY dahil); zaman stopu kapanışa göre kısalır
+  const toClose = (ctx.closeToday - now) / 60e3;
+  const c = await contractIdea({ sym, dir: sig.dir, S, stop: sig.stop, target: sig.target, r, today, allow0: toClose > 90,
+    timeStopFn: exp0 => capStop(exp0 ? 45 : 90, ctx.closeToday, now) });
   const lab = sig.dir === "C" ? "🟢 CALL AL" : "🔴 PUT AL";
   const L = [head, dataLine, `${lab} — skor ${sig.score >= 0 ? "+" : ""}${sig.score} · ${sig.why.join(" · ")}`, ...c.lines];
-  return { sym, sig, pick: c.pick, expD: c.expD, text: L.join("\n") };
+  return { sym, sig, pick: c.pick, expD: c.expD, expClose: c.expClose, tstop: c.timeStop, text: L.join("\n") };
 }
 
 // ORTAK KONTRAT FİKRİ (15 dk fikri + ani hareket alarmı): yön + dayanak seviyeleri → likit kontrat, prim, opsiyonun stop/hedef
 // karşılığı, olasılıklar. allow0: bugün vadeli (0DTE) kullanılabilir mi. Dönüş: { pick, expD, lines }
-export async function contractIdea({ sym, dir, S, stop, target, r = 0.04, today, allow0 = false, timeStop = null }) {
+export async function contractIdea({ sym, dir, S, stop, target, r = 0.04, today, allow0 = false, timeStop = null, timeStopFn = null }) {
   const first = await optionChain(sym).catch(() => null);
   const exps = (first?.expirations || []).map(e => ({ e, d: new Date(e * 1e3).toISOString().slice(0, 10) }));
   const ex = allow0 ? exps.find(x => x.d === today) ?? exps.find(x => x.d > today) : exps.find(x => x.d > today);
-  let pick = null;
+  let pick = null, expClose = null;
   if (ex) {
     const ch = ex.e === first.exp ? first : await optionChain(sym, ex.e).catch(() => null);
-    const T = Math.max(15 * 60e3, nyTs(ex.d, 16, 0) - Date.now()) / YR;
+    expClose = await closeTsOf(ex.d);                                  // GERÇEK vade kapanışı (erken kapanış günü 13:00)
+    const T = Math.max(60e3, expClose - Date.now()) / YR;
     const q = Math.min(0.05, first?.quote?.divYield || 0);
     // Opsiyon kotasyonları dayanaktan birkaç dk gecikmeli olabilir → IV/delta, zincirin kendi ima ettiği fiyatla (parite) hesaplanır;
     // stop/hedef aynı mesafeyle o fiyata taşınır (aksi halde 0DTE'de IV ve olasılıklar ciddi bozulur).
@@ -152,7 +150,9 @@ export async function contractIdea({ sym, dir, S, stop, target, r = 0.04, today,
       pick.pop = popLong(dir, S, pick.K, pick.prem, T, pick.iv);
     }
   }
-  const expD = ex?.d, L = [`   Dayanak: giriş ~${f2(S)} · stop ${f2(stop)} · hedef ${f2(target)} (risk/ödül 1:${IDX.RR})`];
+  const expD = ex?.d;
+  if (timeStopFn) timeStop = timeStopFn(expD === today);
+  const L = [`   Dayanak: giriş ~${f2(S)} · stop ${f2(stop)} · hedef ${f2(target)} (risk/ödül 1:${IDX.RR})`];
   if (pick) {
     const dte = expD === today ? "0DTE (bugün)" : `sonraki vade (${expD})`;
     L.push(`   Kontrat: ${sym} ${pick.K}${dir} · ${dte} · delta ${Math.abs(pick.delta).toFixed(2)} · prim ~$${f2(pick.prem)} (spread %${(pick.spread * 100).toFixed(0)})`);
@@ -160,7 +160,7 @@ export async function contractIdea({ sym, dir, S, stop, target, r = 0.04, today,
     L.push(`   Olasılık: hedefin stoptan önce gelmesi ≈ %33 (kuramsal, 1:2) · vadede kâr ${pick.pop != null ? "%" + Math.round(pick.pop * 100) : "—"}`);
     if (Math.abs(pick.gap) > 0.0005) L.push(`   Veri: opsiyon kotasyonu canlı fiyattan ${pct(pick.gap)} geride (zincir primi ${f2(pick.chainPrem)}) → prim canlı fiyata göre yeniden hesaplandı${Math.abs(pick.gap) > 0.003 ? " · ⚠ kotasyonlar bayat olabilir, emirden önce aracı kurumda kontrol et" : ""}.`);
   } else L.push("   Kontrat: likit kısa vadeli kontrat bulunamadı (spread geniş ya da zincir alınamadı) → dayanak seviyeleriyle izle.");
-  return { pick, expD, lines: L };
+  return { pick, expD, expClose, timeStop, lines: L };
 }
 
 // extra: { ev: makro olaylar, pre: başa eklenecek satırlar (ör. dünkü karne) }
@@ -176,7 +176,7 @@ export async function buildIdx15(now = new Date(), extra = {}) {
   // Gün içi VIX: Yahoo ^VIX 15 dk GECİKMELİ → Alpaca'da canlı VIXY varsa skor onunla (VIX eşdeğerine çevrilerek)
   const vy = live.VIXY, vyFresh = freshPrice(vy, now.getTime()) && vy.prev > 0;
   const vix = vyFresh ? { now: vy.price, prev: vy.prev, k: 2, src: "canlı VIXY" } : vq ? { now: vq.price, prev: vq.prevClose, k: 1, src: "^VIX 15 dk gecikmeli" } : null;
-  const ctx = { today, sessStart, mins, r, vix, live, intra };
+  const ctx = { today, sessStart, mins, r, vix, live, intra, closeToday: await closeTsOf(today) };
   const parts = [];
   for (const sym of IDX.SYMS) parts.push(await oneSymbol(sym, ctx).catch(e => ({ sym, text: `${sym}: hata (${e?.message || e})` })));
   const hh = String(Math.floor(mins / 60)).padStart(2, "0"), mm = String(mins % 60).padStart(2, "0");
@@ -194,6 +194,7 @@ async function main() {
   if (process.env.FORCE !== "1") {
     if (wd === "Sat" || wd === "Sun" || mins < IDX.START || mins >= IDX.END) { console.log("[15dk] seans penceresi dışında."); return 3; }
     if (!(await isMarketOpen())) { console.log("[15dk] piyasa kapalı (tatil)."); return 3; }
+    if ((await closeTsOf(nyParts().date)) - Date.now() < 15 * 60e3) { console.log("[15dk] kapanışa < 15 dk — yeni fikir yok."); return 3; }
   }
   // Canlı karne: kendi Gist dosyası (okunamazsa karne bu sefer atlanır, fikir yine gönderilir)
   const files = await loadFiles([IDEA_FILES.idx, TUNE_FILE]);
@@ -219,10 +220,13 @@ async function main() {
     for (const p of parts) {
       if (!p.sig?.dir) continue;
       const it = { src: "idx", sym: p.sym, dir: p.sig.dir, ts: now, S: p.sig.S, stop: p.sig.stop, target: p.sig.target, hor: HORIZON.idx,
-        score: Math.abs(p.sig.score), tstop: p.expD === today ? 45 : 90,
+        score: Math.abs(p.sig.score), tstop: p.tstop ?? (p.expD === today ? 45 : 90), expClose: p.expClose,
         ...(p.pick ? { occ: p.pick.sym, K: p.pick.K, exp: p.expD, prem: p.pick.prem, iv: +p.pick.iv.toFixed(4) } : {}) };
       it.id = ideaId(it);
-      if (it.occ) it.paper = await paperBuy(it.occ, it.prem, it.id).catch(() => null);   // sanal hesapta gerçek emir
+      if (it.occ) {
+        it.paper = await paperBuy(it.occ, it.prem, it.id).catch(() => null);           // sanal hesapta gerçek emir
+        if (!it.paper) await warnPaperFail(sendTG, it.occ).catch(() => {});
+      }
       if (book) addIdea(book, it);
       fresh.push(it);
     }

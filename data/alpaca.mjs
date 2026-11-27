@@ -129,6 +129,18 @@ export async function intradayBars(symbols, startIso, timeframe = "5Min") {
   return out;
 }
 
+// Seans saatleri (erken kapanış dahil): { open: "09:30", close: "13:00" } | null (işlem günü değil) | undefined (bilinmiyor)
+const calCache = new Map();
+export async function calendarDay(dateIso) {
+  if (!alpacaEnabled()) return undefined;
+  if (calCache.has(dateIso)) return calCache.get(dateIso);
+  const j = await getJSON(`https://paper-api.alpaca.markets/v2/calendar?start=${dateIso}&end=${dateIso}`);
+  if (!Array.isArray(j)) return undefined;
+  const d = j.find(x => x.date === dateIso) || null, v = d ? { open: d.open, close: d.close } : null;
+  calCache.set(dateIso, v);
+  return v;
+}
+
 export async function isTradingDay(dateIso) {
   if (!alpacaEnabled()) return null;
   const j = await getJSON(`https://paper-api.alpaca.markets/v2/calendar?start=${dateIso}&end=${dateIso}`);

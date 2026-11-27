@@ -1,5 +1,5 @@
 // ABD seans saatleri (New York saati; yaz/kış saati otomatik).
-import { alpacaClock } from "./alpaca.mjs";
+import { alpacaClock, calendarDay } from "./alpaca.mjs";
 
 const NY = "America/New_York";
 
@@ -33,3 +33,33 @@ export async function isMarketOpen(d = new Date()) {
 
 export const nyDate = (d = new Date()) => nyParts(d).date;
 export const fmtTR = (d = new Date()) => d.toLocaleString("tr-TR", { timeZone: "Europe/Istanbul" });
+
+// New York saatiyle dateIso günü h:m → UTC ms (yaz/kış saati otomatik)
+export function nyTs(dateIso, h, m) {
+  const [y, mo, d] = dateIso.split("-").map(Number);
+  for (const off of [4, 5]) {
+    const t = Date.UTC(y, mo - 1, d, h + off, m), p = nyParts(new Date(t));
+    if (p.date === dateIso && p.mins === h * 60 + m) return t;
+  }
+  return Date.UTC(y, mo - 1, d, h + 5, m);
+}
+
+// Bilinen ERKEN KAPANIŞ günleri (13:00 NY) — Alpaca yoksa yedek kural: Şükran Günü ertesi Cuma, 24 Aralık, 3 Temmuz (hafta içiyse)
+export function earlyCloseRule(dateIso) {
+  const [y, m, d] = dateIso.split("-").map(Number), wd = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+  if (wd === 0 || wd === 6) return false;
+  if (m === 12 && d === 24) return true;
+  if (m === 7 && d === 3) return true;
+  if (m === 11 && wd === 5) {                                     // 4. Perşembe + 1
+    const first = new Date(Date.UTC(y, 10, 1)).getUTCDay(), thu4 = 1 + ((4 - first + 7) % 7) + 21;
+    return d === thu4 + 1;
+  }
+  return false;
+}
+
+// Seansın (ve o gün vadeli opsiyonların) GERÇEK kapanış anı: Alpaca takvimi → yedek kural → 16:00
+export async function closeTsOf(dateIso) {
+  const c = await calendarDay(dateIso).catch(() => undefined);
+  if (c?.close) { const [h, m] = c.close.split(":").map(Number); return nyTs(dateIso, h, m); }
+  return nyTs(dateIso, earlyCloseRule(dateIso) ? 13 : 16, 0);
+}

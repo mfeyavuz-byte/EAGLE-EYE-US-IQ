@@ -39,7 +39,7 @@ import { newsSentiment, newsTag } from "./news.mjs";
 import { liveAudit, freshPrice } from "./liveaudit.mjs";
 import { paperOptReport } from "./optpaper.mjs";
 import { tuneAll, fmtTune, TUNE_FILE } from "./tune.mjs";
-import { paperBuy, paperClose, paperQty, paperUnwind } from "./optpaper.mjs";
+import { paperBuy, paperClose, paperQty, paperUnwind, warnPaperFail } from "./optpaper.mjs";
 import { buildEarnings, straddleValue, fmtEarnBook, ER } from "./earnings.mjs";
 import { earningsOn, reportDates } from "../data/nasdaq.mjs";
 // Haftalık rapor eki: sanal opsiyon hesabı (gerçek dolumlar, 7 gün) + eşik ayarı durumu
@@ -83,6 +83,7 @@ async function earningsStep(st, today, mins) {
     const q = paperQty(b.cost);                                                // iki bacak aynı adet; maliyet = straddle
     const pc = q ? await paperBuy(b.occC, b.cMid, id + "-C", q).catch(() => null) : null;
     const pp = pc ? await paperBuy(b.occP, b.pMid, id + "-P", q).catch(() => null) : null;
+    if (q && !pp) await warnPaperFail(sendTG, pc ? b.occP : b.occC).catch(() => {});
     if (pc && !pp) await paperUnwind(pc, b.occC).catch(() => null);         // tek bacak kalmasın
     st.earn.open.push({ sym: b.sym, d: today, reactD: b.reactD, K: b.K, occC: b.occC, occP: b.occP, expTs: b.expTs, cost: b.cost, ratio: +b.ratio.toFixed(2), paper: !!(pc && pp) });
   }

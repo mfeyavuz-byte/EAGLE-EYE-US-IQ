@@ -10,13 +10,14 @@ const BASE = "https://paper-api.alpaca.markets";
 const HDR = () => ({ "APCA-API-KEY-ID": process.env.ALPACA_KEY_ID || "", "APCA-API-SECRET-KEY": process.env.ALPACA_SECRET_KEY || "", "content-type": "application/json" });
 export const paperEnabled = () => process.env.PAPER_TRADE === "1" && alpacaEnabled();
 
+export const paperState = { lastErr: null };                       // son Alpaca hata metni (tanı için)
 export async function call(method, path, body) {
   try {
     const r = await fetch(BASE + path, { method, headers: HDR(), body: body ? JSON.stringify(body) : undefined });
     const txt = await r.text();
-    if (!r.ok) { console.error("[Paper]", method, path, r.status, txt.slice(0, 160)); return null; }
+    if (!r.ok) { console.error("[Paper]", method, path, r.status, txt.slice(0, 160)); paperState.lastErr = `${r.status} ${txt.slice(0, 160)}`; return null; }
     return txt ? JSON.parse(txt) : {};
-  } catch (e) { console.error("[Paper]", e.message); return null; }
+  } catch (e) { console.error("[Paper]", e.message); paperState.lastErr = e.message; return null; }
 }
 
 export const account = () => call("GET", "/v2/account");

@@ -4,7 +4,10 @@
 // • Uç nokta SABİT: paper-api.alpaca.markets → gerçek hesaba/paraya dokunamaz. PAPER_OPT=0 ile kapatılır.
 // • Boyut: fikir başına OPT_PAPER_BUDGET (vars. $1.000) → adet = bütçe ÷ (prim × 100), en az 1; tek kontrat bütçenin
 //   3 katını aşıyorsa alınmaz.
-import { call } from "./paper.mjs";
+import { call, paperState } from "./paper.mjs";
+import { readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { alpacaEnabled } from "../data/alpaca.mjs";
 
 export const optPaperEnabled = () => alpacaEnabled() && process.env.PAPER_OPT !== "0";
@@ -26,6 +29,7 @@ export async function paperBuy(occ, prem, id, qtyIn = null) {
   if (!optPaperEnabled() || !occ) return null;
   const qty = qtyIn ?? paperQty(prem);
   if (!qty) { console.log(`[Opsiyon paper] ${occ}: kontrat bütçeye göre pahalı, alınmadı`); return null; }
+  paperState.lastErr = null;
   const o = await call("POST", "/v2/orders", { symbol: occ, qty: String(qty), side: "buy", type: "market", time_in_force: "day", client_order_id: orderId(id) });
   if (o?.id) console.log(`[Opsiyon paper] AL ${occ} ×${qty}`);
   return o?.id ? { id: o.id, qty } : null;
@@ -77,4 +81,17 @@ export async function paperUnwind(res, occ) {
   await call("DELETE", `/v2/orders/${encodeURIComponent(res.id)}`);
   await new Promise(r => setTimeout(r, 1500));
   await paperClose(occ);
+}
+
+// Emir reddedildiyse Alpaca'nın gerekçesini Telegram'a yaz (günde en çok 1 kez; aynı makinedeki süreçler ortak dosya)
+const WARN = join(process.env.RUNNER_TEMP || tmpdir(), "eagle_paper_warn.txt");
+export async function warnPaperFail(send, occ) {
+  const err = paperState.lastErr;
+  if (!err || !optPaperEnabled()) return false;
+  const day = new Date().toISOString().slice(0, 10);
+  try { if (readFileSync(WARN, "utf8") === day) return false; } catch {}
+  try { writeFileSync(WARN, day); } catch {}
+  return send(`⚠ SANAL OPSİYON EMRİ REDDEDİLDİ (${occ}) — Alpaca: ${err}\n` +
+    "Olası neden: Alpaca paper hesabında opsiyon izni kapalı (Alpaca → Paper hesabı → Account/Configure → Options Trading Level ≥ 1) " +
+    "ya da alım gücü yetersiz. Fikir ve çıkış mesajları ETKİLENMEZ; yalnız gerçek dolum karnesi boş kalır. (Bu uyarı günde 1 kez.)");
 }

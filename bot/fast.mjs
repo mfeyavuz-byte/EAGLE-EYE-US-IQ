@@ -14,13 +14,14 @@ import { join } from "node:path";
 import { nyParts, isRegularHours, fmtTR } from "../data/market.mjs";
 import { intradayBars, liveQuotes, alpacaEnabled, marketClock } from "../data/alpaca.mjs";
 import { fetchChart, riskFreeRate } from "../data/yahoo.mjs";
-import { contractIdea, nyTs, IDX } from "./idx15.mjs";
+import { contractIdea, nyTs, IDX, capStop } from "./idx15.mjs";
+import { closeTsOf } from "../data/market.mjs";
 import { sendTG } from "./telegram.mjs";
 import { loadFiles, saveFiles, READ_FAILED } from "./state.mjs";
 import { IDEA_FILES, HORIZON, addIdea, settleIdeas } from "./ideabook.mjs";
 import { macroEvents, nearEvent, fmtNear } from "./macro.mjs";
 import { freshPrice, ageTxt } from "./liveaudit.mjs";
-import { paperBuy, paperClose } from "./optpaper.mjs";
+import { paperBuy, paperClose, warnPaperFail } from "./optpaper.mjs";
 import { TUNE_FILE, tunedValue } from "./tune.mjs";
 import { pushOpenLocal, readOpenLocal, ideaId, checkExit, optValue, fmtExit } from "./exits.mjs";
 
@@ -151,7 +152,8 @@ export async function scanFast(st, now = Date.now(), toCloseMin = null, opts = {
   let sent = 0;
   for (const [i, { sym, sig }] of top.entries()) {
     const allow0 = ETFS.has(sym) && (toCloseMin ?? 960 - mins) > 90;
-    const c = await contractIdea({ sym, dir: sig.dir, S: sig.S, stop: sig.stop, target: sig.target, r, today, allow0, timeStop: 30 });
+    const closeMs = now + (toCloseMin ?? 960 - mins) * 60e3;                 // gerçek kapanış (erken kapanış dahil)
+    const c = await contractIdea({ sym, dir: sig.dir, S: sig.S, stop: sig.stop, target: sig.target, r, today, allow0, timeStop: capStop(30, closeMs, now) });
     const title = sig.kind === "burst" ? (sig.dir === "C" ? "⚡ ANİ YÜKSELİŞ" : "⚡ ANİ DÜŞÜŞ") : (sig.dir === "C" ? "↩️ ANİ DÖNÜŞ (dipten)" : "↩️ ANİ DÖNÜŞ (tepeden)");
     const text = [`${title} — ${sym} · ${hh}:${mm} NY · ${fmtTR(new Date(now))} TR`, sig.why,
       `${sig.dir === "C" ? "🟢 CALL AL" : "🔴 PUT AL"} (yalnız alım)`, ...c.lines, "   " + sig.data,
@@ -161,9 +163,12 @@ export async function scanFast(st, now = Date.now(), toCloseMin = null, opts = {
     if (await sendTG(text)) {
       st.cd[sym] = now; st.n++; sent++;
       const it = { src: "fast", sym, dir: sig.dir, kind: sig.kind, ts: now, S: sig.S, stop: sig.stop, target: sig.target, hor: HORIZON.fast,
-        z: Math.abs(sig.z), tstop: 30, ...(c.pick ? { occ: c.pick.sym, K: c.pick.K, exp: c.expD, prem: c.pick.prem, iv: +c.pick.iv.toFixed(4) } : {}) };
+        z: Math.abs(sig.z), tstop: c.timeStop, expClose: c.expClose, ...(c.pick ? { occ: c.pick.sym, K: c.pick.K, exp: c.expD, prem: c.pick.prem, iv: +c.pick.iv.toFixed(4) } : {}) };
       it.id = ideaId(it);
-      if (it.occ) it.paper = await paperBuy(it.occ, it.prem, it.id).catch(() => null);   // sanal hesapta gerçek emir
+      if (it.occ) {
+        it.paper = await paperBuy(it.occ, it.prem, it.id).catch(() => null);           // sanal hesapta gerçek emir
+        if (!it.paper) await warnPaperFail(sendTG, it.occ).catch(() => {});
+      }
       if (opts.book) addIdea(opts.book, it);
       pushOpenLocal([it], now);                                                          // çıkış takibi
       if (i === 0) for (const x of rest) st.cd[x.sym] = now;
@@ -190,7 +195,7 @@ export async function monitorExits(st, book, now = Date.now(), toCloseMin = 999)
     const ex = checkExit(it, { px, hi: after.length ? Math.max(...after.map(b => b.high)) : null, lo: after.length ? Math.min(...after.map(b => b.low)) : null, now, toCloseMin });
     if (!ex) continue;
     const closed = it.paper ? !!(await paperClose(it.occ).catch(() => null)) : false;
-    const val = it.exp ? optValue(it, ex.px, now, nyTs(it.exp, 16, 0)) : null;
+    const val = it.exp ? optValue(it, ex.px, now, it.expClose ?? await closeTsOf(it.exp)) : null;   // GERÇEK vade kapanışıyla
     if (await sendTG(fmtExit(it, ex, val, closed))) {
       (st.exits ||= {})[it.id] = now;
       if (book) (book.exits ||= {})[it.id] = now;
