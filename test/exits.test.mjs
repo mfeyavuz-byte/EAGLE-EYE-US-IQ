@@ -20,7 +20,7 @@ test("çıkış: stop önceliği, hedef, zaman, kapanış", () => {
   assert.equal(ideaId(it), "idx-SPY-0");
   const v = optValue(it, 102, Date.parse("2026-12-01T15:00:00Z"), Date.parse("2026-12-04T21:00:00Z"));
   assert.ok(v > 2 && v < 4);
-  assert.match(fmtExit(it, { why: "HEDEF", px: 102 }, v, true), /HEDEF[\s\S]*\+2\.00R[\s\S]*KAPAT[\s\S]*paper/);
+  assert.match(fmtExit(it, { why: "HEDEF", px: 102 }, v, true), /^✅ KAPAT: SPY 100C 04\.12 — hedef geldi \(SPY 102\.00, \+2\.0R\) · opsiyon ~\$[\d.]+ \(\+%\d+\) 🧾$/);
 });
 
 test("sanal opsiyon: adet, emir kimliği, FIFO tur hesabı", () => {

@@ -66,15 +66,12 @@ export async function buildEarnings(today, nextDay, deps) {
     res.push({ sym: r.sym, when, S, exp: ex.d, expTs: ex.e, reactD: nextDay, ...st, implied, real, ratio, n: moves.length, cheap: ratio != null && ratio <= ER.CHEAP });
   }
   const buys = res.filter(x => x.cheap), skip = res.filter(x => !x.cheap);
-  const L = [`🎯 BİLANÇO STRADDLE — ${today} (yalnız ALIM: aynı vadede ATM call + ATM put)`];
-  if (!res.length) L.push("Bugün kapanış sonrası / yarın açılış öncesi açıklayan uygun (≥ $20 milyar, likit opsiyonlu) hisse yok.");
-  for (const x of buys) L.push("", `🟢 STRADDLE AL ${x.sym} (${x.when === "amc" ? "bugün kapanış sonrası" : "yarın açılış öncesi"}) · $${x.S.toFixed(2)}`,
-    `   ${x.sym} ${x.K}C + ${x.K}P · vade ${x.exp} · maliyet ~$${x.cost} (×100 = $${Math.round(x.cost * 100)})`,
-    `   Fiyatlanan hareket ${pc(x.implied)} · son ${x.n} bilançonun ort. tepkisi ${pc(x.real)} · oran ${x.ratio.toFixed(2)} (≤ ${ER.CHEAP} = ucuz)`,
-    `   Çıkış: ${x.reactD} 10:00 NY'de iki bacağı birlikte sat (çıkış mesajı gelir). Başabaş: hisse ±${pc(x.implied)} hareket etmeli.`);
-  if (skip.length) L.push("", "Pahalı/yetersiz veri → önerilmez: " + skip.map(x => `${x.sym} ${pc(x.implied)} vs ${pc(x.real)}`).join(" · "));
-  L.push("", "⚠ En kötü durumda straddle maliyetinin büyük kısmı kaybedilir (tepki küçük kalırsa). Geriye dönük test: Actions → \"Bilanço straddle testi\". Yatırım tavsiyesi değildir.");
-  return { text: L.join("\n"), buys, all: res };
+  // SADE: yalnız alınacaklar (yoksa mesaj yok); pahalılar tek satır
+  const L = [];
+  for (const x of buys) L.push(`🎯 ${x.sym} STRADDLE AL — ${x.K}C + ${x.K}P ${x.exp.slice(8, 10)}.${x.exp.slice(5, 7)} · maliyet ~$${x.cost}`,
+    `   Giriş bugün kapanıştan önce · Çıkış ${x.reactD.slice(8, 10)}.${x.reactD.slice(5, 7)} 10:00 NY · kâr için hisse ±%${(x.implied * 100).toFixed(1)} oynamalı (geçmiş ort. %${(x.real * 100).toFixed(1)})`);
+  if (buys.length && skip.length) L.push(`   Pahalı, alınmadı: ${skip.map(x => x.sym).join(", ")}`);
+  return { text: L.length ? L.join("\n") : null, buys, all: res };
 }
 
 // Çıkış değeri: iki bacağın orta fiyatı toplamı − %30 spread | null

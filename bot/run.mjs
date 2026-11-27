@@ -66,7 +66,7 @@ async function earningsStep(st, today, mins) {
     if (val == null && x.reactD === today) continue;                          // kotasyon yok → sonraki çalıştırmada tekrar
     if (x.paper) { await paperClose(x.occC).catch(() => null); await paperClose(x.occP).catch(() => null); }
     const ret = val != null ? val / x.cost - 1 : null;
-    if (await sendTG(`🎯 BİLANÇO STRADDLE ÇIKIŞ — ${x.sym} ${x.K}C + ${x.K}P → İKİ BACAĞI SAT\nGiriş ~${x.cost} · şimdi ~${val != null ? val.toFixed(2) : "—"} · ${ret != null ? (ret >= 0 ? "+" : "") + (ret * 100).toFixed(0) + "%" : "kotasyon yok"}${x.paper ? "\n🧾 Sanal (paper) pozisyon kapatıldı." : ""}`)) {
+    if (await sendTG(`🎯 KAPAT: ${x.sym} ${x.K}C + ${x.K}P — iki bacağı sat · ~$${val != null ? val.toFixed(2) : "—"} (${ret != null ? (ret >= 0 ? "+" : "") + (ret * 100).toFixed(0) + "%" : "kotasyon yok"})${x.paper ? " 🧾" : ""}`)) {
       st.earn.open.splice(i, 1);
       if (ret != null) st.earn.closed.push({ sym: x.sym, d: x.d, ret: +ret.toFixed(4), ratio: x.ratio });
       if (st.earn.closed.length > 300) st.earn.closed.splice(0, st.earn.closed.length - 300);
@@ -76,7 +76,7 @@ async function earningsStep(st, today, mins) {
   if (st.earn.day === today || mins < 900 || mins >= 950) return;
   const nextDay = await nextTradingDay(today);
   const { text, buys } = await buildEarnings(today, nextDay, { earningsOn, reportDates, optionChain, fetchDaily, inUniverse: s => SYMS.includes(s) });
-  if (!(await sendTG(text))) return;
+  if (text && !(await sendTG(text))) return;                                // alınacak yoksa mesaj yok
   st.earn.day = today;
   for (const b of buys) {
     const id = `earn-${b.sym}-${today}`;

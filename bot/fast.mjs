@@ -154,12 +154,12 @@ export async function scanFast(st, now = Date.now(), toCloseMin = null, opts = {
     const allow0 = ETFS.has(sym) && (toCloseMin ?? 960 - mins) > 90;
     const closeMs = now + (toCloseMin ?? 960 - mins) * 60e3;                 // gerçek kapanış (erken kapanış dahil)
     const c = await contractIdea({ sym, dir: sig.dir, S: sig.S, stop: sig.stop, target: sig.target, r, today, allow0, timeStop: capStop(30, closeMs, now) });
-    const title = sig.kind === "burst" ? (sig.dir === "C" ? "⚡ ANİ YÜKSELİŞ" : "⚡ ANİ DÜŞÜŞ") : (sig.dir === "C" ? "↩️ ANİ DÖNÜŞ (dipten)" : "↩️ ANİ DÖNÜŞ (tepeden)");
-    const text = [`${title} — ${sym} · ${hh}:${mm} NY · ${fmtTR(new Date(now))} TR`, sig.why,
-      `${sig.dir === "C" ? "🟢 CALL AL" : "🔴 PUT AL"} (yalnız alım)`, ...c.lines, "   " + sig.data,
-      ...(fmtNear(nearEvent(opts.ev, now), now) ? ["   " + fmtNear(nearEvent(opts.ev, now), now)] : []),
-      ...(i === 0 && rest.length ? [`   Aynı anda: ${rest.map(x => `${x.sym} ${x.sig.dir === "C" ? "↑" : "↓"} ${pctS(x.sig.move)}`).join(" · ")} (piyasa geneli hareket)`] : []),
-      "   Not: ani hareket sonrası devam da geri dönüş de olur → küçük pozisyon, stop'a uy. ⚠ Yatırım tavsiyesi değildir."].join("\n");
+    const title = sig.kind === "burst" ? (sig.dir === "C" ? "⚡ Ani yükseliş" : "⚡ Ani düşüş") : (sig.dir === "C" ? "↩️ Dipten dönüş" : "↩️ Tepeden dönüş");
+    console.log(`[⚡] ${sym} ${sig.kind} ${sig.dir} · ${sig.why} · ${sig.data}`);
+    const near = fmtNear(nearEvent(opts.ev, now), now);
+    const text = [`${title} · ${sig.dir === "C" ? "🟢" : "🔴"} ${sym} ${sig.dir === "C" ? "CALL" : "PUT"} AL — ${c.contract}`, ...c.lines,
+      ...(near ? ["   " + near] : []),
+      ...(i === 0 && rest.length ? [`   Aynı anda: ${rest.map(x => `${x.sym} ${x.sig.dir === "C" ? "↑" : "↓"}`).join(" ")}`] : [])].join("\n");
     if (await sendTG(text)) {
       st.cd[sym] = now; st.n++; sent++;
       const it = { src: "fast", sym, dir: sig.dir, kind: sig.kind, ts: now, S: sig.S, stop: sig.stop, target: sig.target, hor: HORIZON.fast,

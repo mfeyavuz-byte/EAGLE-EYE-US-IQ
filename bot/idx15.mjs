@@ -89,6 +89,7 @@ export function pickIdxContract(legs, type, S, T, r, q, delta) {
   return c || null;
 }
 
+const trD = d => (d ? d.slice(8, 10) + "." + d.slice(5, 7) : "—");
 const f2 = x => (x == null || !isFinite(x) ? "—" : x.toFixed(2));
 const pct = x => (x == null ? "—" : (x >= 0 ? "+" : "−") + "%" + Math.abs(x * 100).toFixed(Math.abs(x) < 0.1 ? 2 : 0));
 
@@ -105,20 +106,20 @@ async function oneSymbol(sym, ctx) {
   const ageMs = lp ? now - live[sym].ts : lastBar ? now - lastBar.ts - 5 * 60e3 : null;
   const dataLine = `   Veri: ${lp ? "Alpaca IEX canlı" : alpacaEnabled() ? "son 5 dk mum (canlı fiyat yok)" : "Yahoo (Nasdaq gerçek zamanlı)"} · fiyat ${ageTxt(ageMs)} önce${ageMs > FRESH_MS ? " · ⚠ BAYAT VERİ — fikre güvenme" : ""}`;
   const sig = idxSignal(bars, S, daily, vix);
-  if (!sig) return { sym, text: `${sym}: veri alınamadı.` };
+  if (!sig) return { sym, text: null };
   const head = `${sym} $${f2(S)} · gün ${pct(sig.dayChg)} · VWAP ${f2(sig.vwap)}${sig.rsi != null ? ` · RSI(5dk) ${sig.rsi.toFixed(0)}` : ""}`;
   // Bayat veriyle işlem fikri VERİLMEZ (karneye de girmez)
   if (sig.dir && isRegularHours() && ageMs > FRESH_MS)
-    return { sym, sig: { ...sig, dir: null }, text: `${head}\n${dataLine}\n⛔ Yön ${sig.dir === "C" ? "CALL" : "PUT"} çıktı ama fiyat ${ageTxt(ageMs)} eski → işlem fikri verilmedi.` };
-  if (!sig.dir) return { sym, sig, text: `${head}\n${dataLine}\n⚪ NÖTR (skor ${sig.score >= 0 ? "+" : ""}${sig.score}) — net yön yok → işlem yok, bekle.${sig.why.length ? `\n   ${sig.why.join(" · ")}` : ""}` };
+    { console.log(`[15dk] ${sym}: ${sig.dir} çıktı ama fiyat ${ageTxt(ageMs)} eski → fikir verilmedi`); return { sym, sig: { ...sig, dir: null }, text: null }; }
+  if (!sig.dir) { console.log(`[15dk] ${sym}: nötr (skor ${sig.score}) · ${sig.why.join(" · ")}`); return { sym, sig, text: null }; }
 
   // Vade: 14:30 NY'ye kadar 0DTE, sonrası sonraki vade (son saatlerde 0DTE zaman kaybı çok sert)
   // 0DTE yalnız kapanışa > 90 dk varken (erken kapanış günü 13:00 NY dahil); zaman stopu kapanışa göre kısalır
   const toClose = (ctx.closeToday - now) / 60e3;
   const c = await contractIdea({ sym, dir: sig.dir, S, stop: sig.stop, target: sig.target, r, today, allow0: toClose > 90,
     timeStopFn: exp0 => capStop(exp0 ? 45 : 90, ctx.closeToday, now) });
-  const lab = sig.dir === "C" ? "🟢 CALL AL" : "🔴 PUT AL";
-  const L = [head, dataLine, `${lab} — skor ${sig.score >= 0 ? "+" : ""}${sig.score} · ${sig.why.join(" · ")}`, ...c.lines];
+  console.log(`[15dk] ${sym} ${sig.dir} skor ${sig.score} · ${sig.why.join(" · ")} · ${dataLine.trim()}`);
+  const L = [`${sig.dir === "C" ? "🟢" : "🔴"} ${sym} ${sig.dir === "C" ? "CALL" : "PUT"} AL — ${c.contract}`, ...c.lines];
   return { sym, sig, pick: c.pick, expD: c.expD, expClose: c.expClose, tstop: c.timeStop, text: L.join("\n") };
 }
 
@@ -152,15 +153,12 @@ export async function contractIdea({ sym, dir, S, stop, target, r = 0.04, today,
   }
   const expD = ex?.d;
   if (timeStopFn) timeStop = timeStopFn(expD === today);
-  const L = [`   Dayanak: giriş ~${f2(S)} · stop ${f2(stop)} · hedef ${f2(target)} (risk/ödül 1:${IDX.RR})`];
-  if (pick) {
-    const dte = expD === today ? "0DTE (bugün)" : `sonraki vade (${expD})`;
-    L.push(`   Kontrat: ${sym} ${pick.K}${dir} · ${dte} · delta ${Math.abs(pick.delta).toFixed(2)} · prim ~$${f2(pick.prem)} (spread %${(pick.spread * 100).toFixed(0)})`);
-    L.push(`   Opsiyon: stop ≈ $${f2(pick.atStop)} (${pct(pick.atStop / pick.prem - 1)}) · hedef ≈ $${f2(pick.atTgt)} (${pct(pick.atTgt / pick.prem - 1)}) · zaman stopu ${timeStop ?? (expD === today ? 45 : 90)} dk`);
-    L.push(`   Olasılık: hedefin stoptan önce gelmesi ≈ %33 (kuramsal, 1:2) · vadede kâr ${pick.pop != null ? "%" + Math.round(pick.pop * 100) : "—"}`);
-    if (Math.abs(pick.gap) > 0.0005) L.push(`   Veri: opsiyon kotasyonu canlı fiyattan ${pct(pick.gap)} geride (zincir primi ${f2(pick.chainPrem)}) → prim canlı fiyata göre yeniden hesaplandı${Math.abs(pick.gap) > 0.003 ? " · ⚠ kotasyonlar bayat olabilir, emirden önce aracı kurumda kontrol et" : ""}.`);
-  } else L.push("   Kontrat: likit kısa vadeli kontrat bulunamadı (spread geniş ya da zincir alınamadı) → dayanak seviyeleriyle izle.");
-  return { pick, expD, expClose, timeStop, lines: L };
+  // SADE MESAJ: kontrat (başlıkta) · giriş / hedef / stop / süre · opsiyonun hedefte ve stopta tahmini değeri
+  const ts = timeStop ?? (expD === today ? 45 : 90);
+  const contract = pick ? `${expD === today ? "0DTE" : trD(expD)} ${pick.K}${dir} ~${f2(pick.prem)}` : "kontrat yok (dayanakla izle)";
+  const L = [`   Giriş ${sym} ~${f2(S)} · Hedef ${f2(target)} · Stop ${f2(stop)} · süre ${ts} dk`];
+  if (pick) L.push(`   Opsiyon hedefte ~${f2(pick.atTgt)} · stopta ~${f2(pick.atStop)}${Math.abs(pick.gap) > 0.003 ? " · ⚠ kotasyon bayat olabilir" : ""}`);
+  return { pick, expD, expClose, timeStop: ts, contract, lines: L };
 }
 
 // extra: { ev: makro olaylar, pre: başa eklenecek satırlar (ör. dünkü karne) }
@@ -180,11 +178,10 @@ export async function buildIdx15(now = new Date(), extra = {}) {
   const parts = [];
   for (const sym of IDX.SYMS) parts.push(await oneSymbol(sym, ctx).catch(e => ({ sym, text: `${sym}: hata (${e?.message || e})` })));
   const hh = String(Math.floor(mins / 60)).padStart(2, "0"), mm = String(mins % 60).padStart(2, "0");
-  const text = [`⏱ SPY/QQQ 15 DK OPSİYON FİKRİ — ${hh}:${mm} NY · ${fmtTR(now)} TR`,
-    (vq ? `VIX ${f2(vq.price)} (${pct(vq.prevClose ? vq.price / vq.prevClose - 1 : null)}, 15 dk gecikmeli)` : "VIX —") + (vix ? ` · gün içi skorda: ${vix.src}` : ""),
-    ...[fmtMacroDay(extra.ev, today), fmtNear(nearEvent(extra.ev, now.getTime()), now.getTime()), ...(extra.pre || [])].filter(Boolean), "",
-    parts.map(p => p.text).join("\n\n"), "",
-    `Yalnız ALIM (call/put alımı, opsiyon satışı yok). Kaynak: ${alpacaEnabled() ? "Alpaca IEX canlı" : "Yahoo"} + Yahoo opsiyon zinciri. Geriye dönük test edilmedi. ⚠ Yatırım tavsiyesi değildir.`].join("\n");
+  // Yalnız işlem fikri varsa mesaj (nötr/bayat → mesaj yok)
+  const ideas = parts.filter(p => p.text);
+  const near = fmtNear(nearEvent(extra.ev, now.getTime()), now.getTime());
+  const text = ideas.length ? [`⏱ ${hh}:${mm} NY (${fmtTR(now).split(" ")[1]?.slice(0, 5) || ""} TR)`, ...(near ? [near] : []), ...ideas.map(p => p.text)].join("\n") : null;
   return { text, parts };
 }
 
@@ -203,15 +200,10 @@ async function main() {
   const today = nyParts().date, pre = [];
   if (book) {
     await settleIdeas(book, s => fetchChart(s, "1m", "5d")).catch(e => console.error("[15dk] karne:", e?.message || e));
-    if (book.lastDay !== today) {                                 // günün ilk mesajı: dünkü + 7 günlük karne
-      const d0 = nyTs(today, 0, 0);
-      const prev0 = book.lastTs ? nyTs(nyParts(new Date(book.lastTs)).date, 0, 0) : d0 - 864e5;   // son işlem gününün başı (tatil/hafta sonu atlanır)
-      pre.push(fmtIdeaStats("📒 Önceki işlem günü karnesi", ideaStats(book.ideas, prev0, d0)),
-        fmtIdeaStats("📒 Son 7 gün", ideaStats(book.ideas, d0 - 7 * 864e5, d0)));
-    }
   }
   const ev = await macroEvents().catch(() => []);
   const { text, parts } = await buildIdx15(new Date(), { ev, pre });
+  if (!text) { console.log("[15dk] net fırsat yok — mesaj gönderilmedi."); return 0; }
   const ok = await sendTG(text);
   console.log(`[15dk] SPY/QQQ fikri ${ok ? "gönderildi" : "GÖNDERİLEMEDİ"}.`);
   if (ok) {                                                       // karne defteri okunamasa da çıkış takibi + sanal emir çalışır

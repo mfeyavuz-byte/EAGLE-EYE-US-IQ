@@ -42,15 +42,11 @@ export function optValue(it, px, now, closeTs) {
 }
 
 const f2 = x => (x == null || !isFinite(x) ? "—" : x.toFixed(2));
-const LAB = { STOP: "🛑 ÇIKIŞ — STOP", HEDEF: "✅ ÇIKIŞ — HEDEF", ZAMAN: "⏱ ÇIKIŞ — ZAMAN STOPU", KAPANIŞ: "🔔 ÇIKIŞ — SEANS KAPANIYOR" };
+const LAB = { STOP: ["🛑", "stop"], HEDEF: ["✅", "hedef geldi"], ZAMAN: ["⏱", "süre doldu"], KAPANIŞ: ["🔔", "seans bitiyor"] };
+// SADE çıkış mesajı: ne kapatılacak · neden · sonuç
 export function fmtExit(it, ex, val, paperClosed = false) {
-  const hm = (() => { const m = nyParts(new Date(it.ts)).mins; return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`; })();
   const R = Math.abs(it.S - it.stop), r = R > 0 ? ((it.dir === "C" ? 1 : -1) * (ex.px - it.S)) / R : 0;
-  const src = it.src === "idx" ? "⏱ 15 dk fikri" : "⚡ ani hareket";
-  const L = [`${LAB[ex.why]} — ${it.sym}${it.K ? ` ${it.K}${it.dir}` : ` ${it.dir === "C" ? "CALL" : "PUT"}`}${it.exp ? ` ${it.exp.slice(5)}` : ""} (${src} ${hm} NY)`,
-    `Dayanak $${f2(ex.px)} · giriş ${f2(it.S)} · stop ${f2(it.stop)} · hedef ${f2(it.target)} · sonuç ${r >= 0 ? "+" : ""}${r.toFixed(2)}R`];
-  if (val != null && it.prem) L.push(`Opsiyon ≈ $${f2(val)} (giriş ~$${f2(it.prem)}, ${val >= it.prem ? "+" : "−"}%${Math.abs((val / it.prem - 1) * 100).toFixed(0)}) → POZİSYONU KAPAT`);
-  else L.push("→ POZİSYONU KAPAT");
-  if (paperClosed) L.push("🧾 Sanal (paper) pozisyon da kapatıldı.");
-  return L.join("\n");
+  const what = it.K ? `${it.sym} ${it.K}${it.dir}${it.exp ? " " + it.exp.slice(8, 10) + "." + it.exp.slice(5, 7) : ""}` : `${it.sym} ${it.dir === "C" ? "CALL" : "PUT"}`;
+  const opt = val != null && it.prem ? ` · opsiyon ~$${f2(val)} (${val >= it.prem ? "+" : "−"}%${Math.abs((val / it.prem - 1) * 100).toFixed(0)})` : "";
+  return `${LAB[ex.why][0]} KAPAT: ${what} — ${LAB[ex.why][1]} (${it.sym} ${f2(ex.px)}, ${r >= 0 ? "+" : ""}${r.toFixed(1)}R)${opt}${paperClosed ? " 🧾" : ""}`;
 }

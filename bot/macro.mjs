@@ -52,10 +52,10 @@ export const nearEvent = (ev, now = Date.now(), winMin = 45) => (ev || []).find(
 export function fmtMacroDay(ev, dateIso) {
   const today = eventsOn(ev, dateIso);
   if (!today.length) return null;
-  return `📅 Bugün yüksek etkili ABD verisi: ${today.map(e => `${hm(e.ts)} NY ${e.title}`).join(" · ")} → o saatlerde 0DTE ve ani hareket riski çok yüksek, pozisyonu küçült.`;
+  return `📅 Bugün veri: ${today.map(e => `${hm(e.ts)} NY ${e.title}`).join(" · ")} — o saatlerde dikkat`;
 }
 export function fmtNear(e, now = Date.now()) {
   if (!e) return null;
   const d = Math.round((e.ts - now) / 60e3);
-  return `⚠ ${e.title} ${d >= 0 ? `${d} dk sonra` : `${-d} dk önce`} (${hm(e.ts)} NY) — veri oynaklığı: sahte kırılım/ani dönüş riski yüksek.`;
+  return `⚠ ${e.title} ${d >= 0 ? `${d} dk sonra` : `${-d} dk önce`} — sahte hareket riski`;
 }

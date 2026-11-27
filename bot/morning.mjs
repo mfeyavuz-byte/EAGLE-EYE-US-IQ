@@ -73,59 +73,36 @@ export async function buildMorning(deps) {
   for (const sym of Object.keys(FUT)) futs[sym] = await deps.futQuote(FUT[sym]).catch(() => null);
   const fx = s => futs[s]?.price && futs[s]?.prevClose ? futs[s].price / futs[s].prevClose - 1 : null;
   const v = vix.at(-1), vChg = vix.length > 1 ? v / vix.at(-2) - 1 : 0;
-  L.push(`🌅 AÇILIŞ ÖNCESİ — SPY / QQQ gün içi eğilim · ${deps.today}`);
-  L.push(`Duyarlılık: VIX ${v.toFixed(1)} (dün ${pc(vChg)}) · ${v > 30 ? "YÜKSEK KORKU" : v > 20 ? "gergin" : "sakin"} · vadeli: ES ${fx("SPY") != null ? pc(fx("SPY")) : "—"} · NQ ${fx("QQQ") != null ? pc(fx("QQQ")) : "—"}`);
-  // Korku & Açgözlülük: 1 günlük etkisi tutarsız → gün içi skora katılmaz; 5–10 günlük etki ETF modülünde kullanılır
-  const fgTxt = deps.fearGreed ? await deps.fearGreed().catch(() => null) : null;
-  if (fgTxt) L.push(fgTxt + "\n   (gün içi skora katılmaz: 1 günlük etkisi ölçümde tutarsız; 5–10 günlük etkisi ETF fırsatlarında kullanılır)");
+  // SADE BİÇİM: duyarlılık tek satır; her ETF için ya "işlem yok" ya da kontrat + giriş/hedef/stop
+  const fgV = deps.fg != null ? ` · Korku/Açgözlülük ${deps.fg}${deps.fg < 25 ? " (aşırı korku)" : deps.fg > 75 ? " (aşırı açgözlülük)" : ""}` : "";
+  L.push(`🌅 SABAH · ${trD(deps.today)} · VIX ${v.toFixed(1)}${fgV} · vadeli ES ${fx("SPY") != null ? pc(fx("SPY")) : "—"} NQ ${fx("QQQ") != null ? pc(fx("QQQ")) : "—"}`);
   for (const sym of ["SPY", "QQQ"]) {
     const closes = await deps.closesFor(sym);
     const s = closes && morningScore(closes, vix);
-    if (!s) { L.push("", `${sym}: veri alınamadı.`); continue; }
+    if (!s) { L.push(`${sym}: veri yok`); continue; }
     // Tahmini açılış: ön piyasa CANLI fiyat (Alpaca IEX, ≤ 10 dk) varsa o; yoksa vadeli değişimi (Yahoo, 10 dk gecikmeli)
     const pm = deps.liveNow ? await deps.liveNow(sym).catch(() => null) : null;
     const prev = closes.at(-1), estOpen = +(pm?.price > 0 ? pm.price : prev * (1 + (fx(sym) ?? 0))).toFixed(2);
-    const src = pm?.price > 0 ? "ön piyasa canlı" : fx(sym) != null ? "vadeliden, 10 dk gecikmeli" : "dünkü kapanış";
-    L.push("", `${sym} · dün $${prev.toFixed(2)} · tahmini açılış ~$${estOpen} (${src}) · trend ${s.up200 ? "yukarı (200g üstü)" : "aşağı (200g altı)"} · RSI(2) ${s.rsi2.toFixed(1)}`);
-    L.push(`Koşullar: ${s.conds.map(c => `${c.ok ? "✓" : "✗"} ${c.txt}`).join(" · ")}`);
-    if (s.score === 0) {
-      L.push(`⏸ NÖTR — işlem önerilmez. Bu koşullarda gün içi yön geçmişte yazı-tura (isabet %51–54).`);
-      continue;
-    }
+    if (s.score === 0) { L.push(`${sym}: işlem yok`); continue; }
     const lv = levels(estOpen, v, sym);
-    L.push(`📈 CALL (gün içi) · skor ${s.score}/3 · geçmiş: ${HIST[sym][Math.min(2, s.score)]} (1993–2026)`);
-    L.push(`HEDEF ${sym} $${lv.target} (+${(MORNING.EM_K * lv.em * 100).toFixed(2)}%) · STOP $${lv.stop} (−${(MORNING.EM_K * lv.em * 100).toFixed(2)}%) · hiçbiri olmazsa KAPANIŞTA çık`);
-    // Vade seçenekleri: 0DTE · 1DTE · haftalık — kâr olasılığı (vadede başabaşın ötesi; modelin ölçülmüş yön avantajıyla)
     const chain = deps.chainFor ? await deps.chainFor(sym).catch(() => null) : null;
-    const mu = EDGE[sym][Math.min(2, s.score)] * 252, sigV = (v / 100) * (sym === "QQQ" ? 1.25 : 1);
-    let first = null;
-    for (const [lab, lo, hi] of TENORS) {
-      const t = pickTenor(chain, lo, hi, "C", 0.5);
-      if (!t) { L.push(`• ${lab}: uygun kotasyon yok — açılışta ATM call (${Math.round(estOpen)}C) fiyatını kontrol et`); continue; }
-      first ||= t;
-      const pop = popLong("C", estOpen, t.c.K, t.prem, Math.max(t.ex.T, 1 / 365), t.c.iv || sigV, mu);
-      L.push(`• ${lab}: AL ${t.c.K}C · vade ${trD(t.expD)} · ~$${t.prem.toFixed(2)} · başabaş $${(t.c.K + t.prem).toFixed(2)} · kâr olasılığı ~%${pop != null ? Math.round(pop * 100) : "?"}`);
-    }
-    L.push(`  ↳ 0DTE en ucuz ama en riskli (zaman değeri gün içinde erir); haftalık daha affedici. Hedefte sat, stop'ta ya da prim −%50'de çık.`);
+    const opts = TENORS.slice(0, 3).map(([lab, lo, hi]) => [lab, pickTenor(chain, lo, hi, "C", 0.5)]).filter(x => x[1]);
+    const first = opts[0]?.[1] || null;
+    L.push(`🟢 ${sym} CALL AL${first ? ` — ${opts[0][0].split(" ")[0]} ${first.c.K}C ~$${first.prem.toFixed(2)}` : ` — ATM ${Math.round(estOpen)}C`}` +
+      (opts[1] ? ` (alternatif ${opts.at(-1)[0].split(" ")[0].toLowerCase()} ${opts.at(-1)[1].c.K}C ~$${opts.at(-1)[1].prem.toFixed(2)})` : ""));
+    L.push(`   Giriş ~${estOpen} (açılış) · Hedef ${lv.target} · Stop ${lv.stop} · olmazsa kapanışta çık`);
     calls.push({ d: deps.today, sym, score: s.score, estOpen, target: lv.target, stop: lv.stop, K: first?.c.K ?? null, exp: first?.expD ?? null });
   }
-  // AŞIRI KORKU (Korku & Açgözlülük < 25): 2–3 haftalık call (5–10 günlük etki ölçülmüş, gün içi değil)
+  // AŞIRI KORKU (< 25): 2–3 haftalık call, 5–10 gün tut (ölçülmüş etki)
   if (deps.fg != null && deps.fg < 25) {
-    L.push("", `😱 AŞIRI KORKU (${deps.fg}/100) — 2–3 hafta vadeli CALL (5–10 gün tut; endeks 50'ye dönünce çık)`);
+    const xs = [];
     for (const sym of ["SPY", "QQQ"]) {
       const chain = deps.chainFor ? await deps.chainFor(sym).catch(() => null) : null;
       const t = pickTenor(chain, 14, 25, "C", 0.6);
-      if (!t) { L.push(`• ${sym}: uygun kotasyon yok`); continue; }
-      const sig = t.c.iv || (vix.at(-1) / 100) * (sym === "QQQ" ? 1.25 : 1);
-      const pop = popLong("C", t.S, t.c.K, t.prem, t.ex.T, sig, 0.09);
-      L.push(`• ${sym}: AL ${t.c.K}C · vade ${trD(t.expD)} (${t.ex.dte}g) · ~$${t.prem.toFixed(2)} · başabaş $${(t.c.K + t.prem).toFixed(2)} · vadede kâr olasılığı ~%${pop != null ? Math.round(pop * 100) : "?"}`);
+      if (t) xs.push(`${sym} ${t.c.K}C ${trD(t.expD)} ~$${t.prem.toFixed(2)}`);
     }
-    L.push("  ↳ Geçmiş (2008–2026): aşırı korkuda 10 gün sonra SPY ort. +%0.6–0.7, QQQ +%0.8–1.0 (taban +%0.3–0.8).");
+    if (xs.length) L.push(`😱 Aşırı korku CALL AL: ${xs.join(" · ")} — 5–10 gün tut, endeks 50'ye dönünce çık`);
   }
-  L.push("", "PUT notu: açılış öncesi bilgilerle düşüş yönünde ölçülmüş avantaj yok (test döneminde zarar) → sabah put önerilmez. Gün içi düşüş sinyali oluşursa ETF modülü ayrıca PUT bildirir.");
-  const h = await deps.headlines().catch(() => []);
-  if (h.length) L.push("", "📰 Başlıklar:", ...h.slice(0, 4).map(x => "• " + x));
-  L.push("", "Gün içi işlem: opsiyon hızlı değer kaybedebilir; prim hesabın en çok %1–2'si olsun. ⚠ Yatırım tavsiyesi değildir.");
   return { text: L.join("\n"), calls };
 }
 
