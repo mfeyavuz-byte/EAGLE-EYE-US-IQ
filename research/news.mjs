@@ -74,5 +74,6 @@ async function main() {
     `Fark (olumlu − olumsuz, 5 gün): ${pc(spread)}`,
     ok ? "KARAR: anlamlı → kurala eklenebilir (onayınla)." : "KARAR: anlamlı DEĞİL → haber etiketi yalnız bilgi olarak kalır, kurala girmez.",
   ].join("\n"));
+  console.log(["ÖZET", "📰 Haber testi", ok ? `✅ Olumlu haberden sonra 5 günde SPY'dan ${pc(spread)} daha iyi → kullanılabilir` : "❌ Haberler işe yaramıyor → kurala girmiyor"].join("\n"));
 }
 main().catch(e => { console.log("SONUÇ\nHata: " + (e?.message || e)); process.exit(1); });

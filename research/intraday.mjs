@@ -11,7 +11,7 @@ import { alpacaEnabled } from "../data/alpaca.mjs";
 import { nyParts } from "../data/market.mjs";
 import { dayFeatures, setupsAt, breadthSeries, outcomeR, dayType, features, fitLogit, predLogit, auc, FEAT_NAMES } from "../bot/setups.mjs";
 import { saveFiles, gistEnabled } from "../bot/state.mjs";
-import { SETUPS_FILE, dtGroup, partOf, MEMBERS } from "../bot/setuplive.mjs";
+import { SETUPS_FILE, dtGroup, partOf, MEMBERS, SETUP_LABEL } from "../bot/setuplive.mjs";
 
 const SYMS = ["SPY", "QQQ"], SECS = ["XLK", "XLF", "XLE", "XLV", "XLY", "XLP", "XLI", "XLB", "XLU", "XLRE", "XLC"];
 const DAYS = +(process.env.INTRA_DAYS || 730);
@@ -43,7 +43,7 @@ function byDayYahoo(arr) {
   return m;
 }
 const st = xs => { const n = xs.length, m = n ? xs.reduce((a, b) => a + b, 0) / n : 0, sd = n > 1 ? Math.sqrt(xs.reduce((a, x) => a + (x - m) ** 2, 0) / (n - 1)) : 0;
-  return { n, m, t: sd > 0 ? m / (sd / Math.sqrt(n)) : 0 }; };
+  return { n, m, t: sd > 0 ? m / (sd / Math.sqrt(n)) : 0, w: n ? xs.filter(x => x > 0).length / n : 0 }; };
 
 async function main() {
   const src = alpacaEnabled() ? "Alpaca SIP" : "Yahoo";
@@ -90,7 +90,7 @@ async function main() {
       const sub = base.filter(r => (part === "tümü" || r.part === part) && (dtg === "tümü" || r.dtg === dtg));
       const a = st(sub.filter(r => r.train).map(R)), b = st(sub.filter(r => !r.train).map(R));
       if (a.n >= 30 && a.m >= 0.15 && a.t >= 2 && b.n >= 15 && b.m >= 0.05)
-        allow.push({ name, dir, hor, part, dtg, n: a.n + b.n, m: +b.m.toFixed(3), mTrain: +a.m.toFixed(3), t: +a.t.toFixed(2) });
+        allow.push({ name, dir, hor, part, dtg, n: a.n + b.n, m: +b.m.toFixed(3), mTrain: +a.m.toFixed(3), t: +a.t.toFixed(2), w: +b.w.toFixed(3) });
     }
   }
   // Aynı kurulum/yön/ufuk "tümü/tümü" geçtiyse alt kırılımlar gereksiz
@@ -114,6 +114,12 @@ async function main() {
     : "CANLIYA ALINAN: yok — hiçbir kurulum hem eğitimde hem testte geçmedi.");
   console.log(model ? `MODEL: test AUC ${model.auc} (0.5 = yazı-tura) · eşik ${model.thr ?? "—"} · eşik üstü test ort ${model.testAvgR ?? "—"}R (n ${model.testN}) → ${model.use ? "KULLANILIYOR" : "KULLANILMIYOR (yetersiz ayırt etme)"}` : "MODEL: veri yetersiz.");
   if (model?.use) console.log("Ağırlıklar: " + FEAT_NAMES.map((n, j) => `${n} ${model.w[j] >= 0 ? "+" : ""}${model.w[j]}`).join(" · "));
+  // TELEGRAM ÖZETİ (kısa): yalnız canlıya alınanlar + model kararı
+  const when = a => [a.part !== "tümü" ? a.part : null, a.dtg !== "tümü" ? { lehte: "trend yönünde", aleyhte: "trende karşı", yatay: "yatay günde" }[a.dtg] : null].filter(Boolean).join(", ");
+  console.log(["ÖZET", `🧪 Gün içi test (SPY/QQQ, ${days.length} gün; son ${days.length - split} gün hiç görülmeden sınandı)`,
+    ...(slim.length ? slim.map(a => `✅ ${a.dir === "C" ? "CALL" : "PUT"} — ${SETUP_LABEL[a.name]?.[a.dir] || a.name}${when(a) ? ` (${when(a)})` : ""}: isabet %${Math.round((a.w || 0) * 100)} · işlem başı ${a.m >= 0 ? "+" : ""}${a.m}R → canlıda`)
+      : ["❌ Hiçbir kurulum testi geçmedi → kurulum mesajı gönderilmeyecek."]),
+    model ? (model.use ? `🤖 Olasılık modeli işe yarıyor → fikirler süzülecek` : "🤖 Olasılık modeli işe yaramadı → kullanılmıyor") : null].filter(Boolean).join("\n"));
   if (days.length >= 120 && gistEnabled() && process.env.INTRA_SAVE !== "0")
     console.log((await saveFiles({ [SETUPS_FILE]: { d: new Date().toISOString().slice(0, 10), src, days: days.length, allow: slim, model } })) ? "Liste ve model Gist'e yazıldı." : "⚠ Liste yazılamadı.");
 }

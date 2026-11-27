@@ -82,5 +82,9 @@ async function main() {
     `Pahalı: ${stats(dear)}`,
     cm == null ? "KARAR: ucuz alt kümede veri yok → canlı fikirler yalnız bilgi." : cm > 0.05 && cheap.length >= 20 ? "KARAR: ucuz straddle kuralı kârlı → canlı kural uygun." : "KARAR: ucuz straddle kuralı kâr ETMİYOR / veri az → canlı fikirleri küçük boyutla izle ya da kapat.",
   ].join("\n"));
+  const win = xs => (xs.length ? Math.round(xs.filter(x => x > 0).length / xs.length * 100) : 0);
+  console.log(["ÖZET", `🎯 Bilanço straddle testi (${res.length} işlem)`,
+    cheap.length ? `Ucuz olanlar: ${cheap.length} işlem · isabet %${win(cheap)} · ortalama ${cm >= 0 ? "+" : ""}${(cm * 100).toFixed(0)}%` : "Ucuz olan yok.",
+    cm != null && cm > 0.05 && cheap.length >= 20 ? "✅ Kâr ediyor → canlıda" : "❌ Kâr etmiyor → bilanço önerilerine güvenme"].join("\n"));
 }
 main().catch(e => { console.log("SONUÇ\nHata: " + (e?.message || e)); process.exit(1); });
