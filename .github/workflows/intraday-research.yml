@@ -1,0 +1,41 @@
+name: Gün içi kurulum araştırması
+
+# SPY/QQQ 5 dk kurulumları (trend geri çekilmesi, VWAP geri alma, açılış düşüşü sindirme, genişlik itkisi) 1 yıllık Alpaca
+# SIP verisiyle ölçülür; eşiği geçenler (n ≥ 40, ort ≥ +0.15R, t ≥ 2) Gist'e yazılır → canlı bot YALNIZ bunları gönderir.
+# Haftalık kendiliğinden (Pazar) + liste yoksa/8 günden eskiyse ana bot zinciri tetikler + elle.
+on:
+  schedule:
+    - cron: "30 7 * * 0"
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Kaç günlük geçmiş"
+        default: "365"
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+      - name: Araştırma
+        env:
+          ALPACA_KEY_ID: ${{ secrets.ALPACA_KEY_ID }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          GH_GIST_TOKEN: ${{ secrets.GH_GIST_TOKEN }}
+          GIST_ID: ${{ secrets.GIST_ID }}
+          INTRA_DAYS: ${{ inputs.days || '365' }}
+        run: |
+          set -o pipefail
+          node research/intraday.mjs | tee out.txt
+          { echo '```'; sed -n '/^SONUÇ/,$p' out.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Sonucu Telegram'a gönder
+        if: always()
+        env:
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CHAT: ${{ secrets.TG_CHAT }}
+          BT_INFO: "Gün içi kurulumlar · commit ${{ github.sha }}"
+        run: node options/send-report.mjs out.txt

@@ -41,11 +41,38 @@ import { paperOptReport } from "./optpaper.mjs";
 import { tuneAll, fmtTune, TUNE_FILE } from "./tune.mjs";
 import { paperBuy, paperClose, paperQty, paperUnwind, warnPaperFail } from "./optpaper.mjs";
 import { buildEarnings, straddleValue, fmtEarnBook, ER } from "./earnings.mjs";
+import { reboundSignal, fmtRebound, REB } from "./rebound.mjs";
+import { weakQuality } from "./edge.mjs";
+import { pickTenor } from "./morning.mjs";
 import { earningsOn, reportDates } from "../data/nasdaq.mjs";
 // Haftalık rapor eki: sanal opsiyon hesabı (gerçek dolumlar, 7 gün) + eşik ayarı durumu
 async function weeklyIdeaExtras(st) {
   const pr = await paperOptReport(7).catch(() => null);
   return (pr ? "\n" + pr : "") + (st.tune ? "\n" + fmtTune(st.tune) : "") + "\n" + fmtEarnBook(st.earn?.closed);
+}
+async function reboundStep(st, today, all) {
+  const cands = [];
+  for (const a of all || []) {
+    if (!a || !(a.dollarVol >= CFG.MIN_DVOL) || a.price < 10) continue;
+    const rows = dailyCache.get(a.sym), sig = rows && reboundSignal(rows, { deep: 2 });
+    if (sig) cands.push({ sym: a.sym, ...sig });
+  }
+  cands.sort((x, y) => x.rsi2 - y.rsi2);
+  const out = [], r = await riskFreeRate().catch(() => 0.04);
+  st.qual ||= {};
+  for (const c of cands.slice(0, 20)) {
+    if (out.length >= REB.MAX_LIST) break;
+    let q = st.qual[c.sym]?.q;
+    if (!q) { q = await qualityStats(c.sym).catch(() => null); if (q) st.qual[c.sym] = { t: Date.now(), q: { margin: q.margin, roe: q.roe, fcf: q.fcf, de: q.de } }; }
+    if (weakQuality(q) !== false) continue;                                  // zarar eden / nakit yakan / aşırı borçlu ya da veri yok → ele
+    const ch = await loadChain(c.sym, r, { minDte: 10, maxDte: 30, targets: [18] }).catch(() => null);
+    const t = pickTenor(ch, 10, 30, "C", 0.5);
+    out.push({ ...c, contract: t ? `${t.expD.slice(8, 10)}.${t.expD.slice(5, 7)} ${t.c.K}C ~${t.prem.toFixed(2)}` : null });
+  }
+  st.rebDay = today;
+  const txt = fmtRebound(out);
+  if (txt) await sendTG(txt);
+  console.log(`[Dönüş] aday ${cands.length} · kaliteli ${out.length}`);
 }
 async function nextTradingDay(today) {
   for (let k = 1; k <= 6; k++) {
@@ -550,6 +577,12 @@ export async function main() {
     st.dataWarnDay = today;
     await sendTG(`⚠ VERİ UYARISI — ${st.data.problem}\nSinyaller gecikmeli/eksik fiyatla üretilmiş olabilir. Kaynak: ${st.data.src}.`);
   }
+  // --- AŞIRI SATIM → HIZLI DÖNÜŞ (15:30–15:50 NY, günde 1): kaliteli + 200g üstü + RSI(2) < 5 + 20g ort. − 2 ATR ---
+  // Ölçüm (research/rebound.mjs, 2015 sonrası 100 likit hisse): ort. +%1.04 / 3.8 gün, kazanan %71 (rastgele gün +%0.27 / 2.5 gün)
+  if (st.rebDay !== today && mins >= 930 && mins < 950) {
+    await reboundStep(st, today, all).catch(e => console.error("[Dönüş]", e?.message || e));
+  }
+
   // --- BİLANÇO STRADDLE: giriş 15:00–15:50 NY (günde 1), çıkış tepki günü 10:00 NY sonrası ---
   await earningsStep(st, today, mins).catch(e => console.error("[Bilanço]", e?.message || e));
 

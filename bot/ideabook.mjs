@@ -3,7 +3,7 @@
 // fiyatla R katı. R = |giriş − stop|. Sonuç dayanak hissede ölçülür (opsiyon primi değil; opsiyonda zaman kaybı ayrıca var).
 // Her yazan süreç KENDİ Gist dosyasına yazar (çakışma yok); tarama (run.mjs) yalnız okur (haftalık rapor, /fikirkarne).
 export const IDEA_FILES = { idx: "abd_ideas_idx.json", fast: "abd_ideas_fast.json" };
-export const HORIZON = { idx: 60, fast: 30 };          // dk
+export const HORIZON = { idx: 60, fast: 30 };          // dk (kurulum fikirleri ufku ölçümden: 30/60)
 const MAX = 600;
 
 export function addIdea(book, idea) {
@@ -58,8 +58,8 @@ export function fmtIdeaStats(title, s) {
 // Rapor bloğu (haftalık rapor, /fikirkarne): iki kaynak × (son 7 gün, son 30 gün)
 export function fmtIdeaReport(books, now = Date.now()) {
   const d7 = now - 7 * 864e5, d30 = now - 30 * 864e5, L = ["📒 GÜN İÇİ FİKİR KARNESİ (dayanakta ölçülür; 1R = girişten stop'a mesafe)"];
-  for (const [k, lab] of [["idx", "⏱ 15 dk SPY/QQQ"], ["fast", "⚡ Ani hareket"]]) {
-    const ideas = books?.[k]?.ideas || [];
+  for (const [k, lab, src] of [["idx", "⏱ 15 dk SPY/QQQ", null], ["fast", "⚡ Ani hareket", "fast"], ["fast", "🎯 Ölçülmüş kurulumlar", "setup"]]) {
+    const ideas = (books?.[k]?.ideas || []).filter(it => !src || (it.src || "fast") === src);
     L.push(fmtIdeaStats(`${lab} · 7 gün`, ideaStats(ideas, d7)), fmtIdeaStats(`${lab} · 30 gün`, ideaStats(ideas, d30)));
   }
   L.push("ℹ Başabaş: 1:2 risk/ödülde isabet ≥ %34 ve ortalama > 0R olmalı. Opsiyonda zaman kaybı ve spread bu sonucu düşürür.");

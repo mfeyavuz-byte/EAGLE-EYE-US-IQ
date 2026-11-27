@@ -20,6 +20,8 @@ import { freshPrice, ageTxt, FRESH_MS } from "./liveaudit.mjs";
 import { paperBuy, warnPaperFail } from "./optpaper.mjs";
 import { TUNE_FILE, tunedValue } from "./tune.mjs";
 import { pushOpenLocal, ideaId } from "./exits.mjs";
+import { tradePlan, fmtPlan, fmtPlanLine } from "./plans.mjs";
+import { loadUniverse } from "../spot/scan.mjs";
 
 export const IDX = { SYMS: ["SPY", "QQQ"], START: 585, END: 950, ODTE_UNTIL: 870, MIN_SCORE: 3, R_ATR: 1.5, R_MIN: 0.0015, RR: 2, SLIP: 0.3, MAX_SPREAD: 0.15 };
 const YR = 365 * 864e5;
@@ -155,9 +157,9 @@ export async function contractIdea({ sym, dir, S, stop, target, r = 0.04, today,
   if (timeStopFn) timeStop = timeStopFn(expD === today);
   // SADE MESAJ: kontrat (başlıkta) · giriş / hedef / stop / süre · opsiyonun hedefte ve stopta tahmini değeri
   const ts = timeStop ?? (expD === today ? 45 : 90);
-  const contract = pick ? `${expD === today ? "0DTE" : trD(expD)} ${pick.K}${dir} ~${f2(pick.prem)}` : "kontrat yok (dayanakla izle)";
+  const contract = pick ? `${expD === today ? "0DTE" : trD(expD)} ${pick.K}${dir} ~$${f2(pick.prem)}` : "kontrat yok (dayanakla izle)";
   const L = [`   Giriş ${sym} ~${f2(S)} · Hedef ${f2(target)} · Stop ${f2(stop)} · süre ${ts} dk`];
-  if (pick) L.push(`   Opsiyon hedefte ~${f2(pick.atTgt)} · stopta ~${f2(pick.atStop)}${Math.abs(pick.gap) > 0.003 ? " · ⚠ kotasyon bayat olabilir" : ""}`);
+  if (pick) L.push(`   Opsiyon hedefte ~$${f2(pick.atTgt)} · stopta ~$${f2(pick.atStop)}${Math.abs(pick.gap) > 0.003 ? " · ⚠ kotasyon bayat olabilir" : ""}`);
   return { pick, expD, expClose, timeStop: ts, contract, lines: L };
 }
 
@@ -185,45 +187,72 @@ export async function buildIdx15(now = new Date(), extra = {}) {
   return { text, parts };
 }
 
-// Çıkış kodu: 0 = gönderildi · 3 = saat/seans dışı (bir şey yapılmadı)
+// ---------- 15 DK (SPY/QQQ/GLD/SLV) + SAATLİK (en yüksek hacimli 25 hisse) İŞLEM PLANLARI ----------
+export const PLAN = { SYMS15: ["SPY", "QQQ", "GLD", "SLV"], TOP_N: 25 };
+let _top = null;
+export function topLiquid(n = PLAN.TOP_N) {                         // evrendeki en yüksek dolar hacimli hisseler
+  if (_top) return _top;
+  const U = loadUniverse();
+  return (_top = Object.entries(U.meta || {}).filter(([, m]) => m?.dv > 0).sort((x, y) => y[1].dv - x[1].dv).slice(0, n).map(([sym]) => sym));
+}
+// Seansın tamamlanmış 5 dk mumları + taze canlı fiyat
+async function sessionBars(syms, sessStart, now) {
+  let bars = {}, live = {};
+  if (alpacaEnabled()) {
+    [bars, live] = await Promise.all([intradayBars(syms, new Date(sessStart).toISOString(), "5Min").then(x => x || {}).catch(() => ({})), liveQuotes(syms).catch(() => ({}))]);
+  }
+  for (const s of syms) if (!(bars[s]?.length > 2)) bars[s] = await fetchChart(s, "5m", "1d").catch(() => []);
+  const out = {};
+  for (const s of syms) out[s] = { bars: (bars[s] || []).filter(b => b.ts >= sessStart && b.ts + 300e3 <= now), S: freshPrice(live[s], now, 120e3) };
+  return out;
+}
+
+export async function buildPlans(now = new Date(), extra = {}) {
+  const t = now.getTime(), { date: today, mins } = nyParts(now), sessStart = nyTs(today, 9, 30);
+  const closeToday = await closeTsOf(today), toClose = (closeToday - t) / 60e3, r = await riskFreeRate().catch(() => 0.04);
+  const data = await sessionBars(PLAN.SYMS15, sessStart, t);
+  const blocks = [];
+  for (const sym of PLAN.SYMS15) {
+    const p = tradePlan(data[sym].bars, data[sym].S);
+    if (!p) { blocks.push(`${sym}: veri yok`); continue; }
+    let contract = null;
+    if (p.trend !== "→") {
+      const side = p.trend === "↑" ? p.call : p.put;
+      const c = await contractIdea({ sym, dir: p.trend === "↑" ? "C" : "P", S: side.entry, stop: side.stop, target: side.target, r, today, allow0: toClose > 90 }).catch(() => null);
+      if (c?.pick) contract = c.contract;
+    }
+    blocks.push(fmtPlan(sym, p, contract));
+  }
+  const near = fmtNear(nearEvent(extra.ev, t), t);
+  const hm = `${String(Math.floor(mins / 60)).padStart(2, "0")}:${String(mins % 60).padStart(2, "0")}`;
+  return [`⏱ ${hm} NY (${fmtTR(now).split(" ")[1]?.slice(0, 5) || ""} TR)`, ...(near ? [near] : []), ...blocks].join("\n");
+}
+
+export async function buildHourly(now = new Date()) {
+  // En hacimli 40'tan hareket eden (plan riski fiyatın ≥ %0.1'i) ilk 25 — satın alma bekleyen/kıpırdamayan hisseler elenir
+  const t = now.getTime(), { date: today, mins } = nyParts(now), syms = topLiquid(PLAN.TOP_N + 15);
+  const data = await sessionBars(syms, nyTs(today, 9, 30), t);
+  const lines = syms.map(s => ({ s, p: tradePlan(data[s].bars, data[s].S) }))
+    .filter(x => x.p && (x.p.call.entry - x.p.call.stop) / x.p.S >= 0.001).slice(0, PLAN.TOP_N).map(x => fmtPlanLine(x.s, x.p));
+  const hm = `${String(Math.floor(mins / 60)).padStart(2, "0")}:${String(mins % 60).padStart(2, "0")}`;
+  return lines.length ? [`🕐 ${hm} NY · En hacimli ${lines.length} hisse (↑/↓ eğilim · h hedef · s stop)`, ...lines].join("\n") : null;
+}
+
+// Çıkış kodu: 0 = gönderildi · 3 = seans dışı · 1 = gönderilemedi
 async function main() {
   const { mins, wd } = nyParts();
   if (process.env.FORCE !== "1") {
     if (wd === "Sat" || wd === "Sun" || mins < IDX.START || mins >= IDX.END) { console.log("[15dk] seans penceresi dışında."); return 3; }
     if (!(await isMarketOpen())) { console.log("[15dk] piyasa kapalı (tatil)."); return 3; }
-    if ((await closeTsOf(nyParts().date)) - Date.now() < 10 * 60e3) { console.log("[15dk] kapanışa < 10 dk — yeni fikir yok."); return 3; }   // normal gün 15:45 fikri korunur
-  }
-  // Canlı karne: kendi Gist dosyası (okunamazsa karne bu sefer atlanır, fikir yine gönderilir)
-  const files = await loadFiles([IDEA_FILES.idx, TUNE_FILE]);
-  const book = files === READ_FAILED ? null : files[IDEA_FILES.idx];
-  if (files !== READ_FAILED) IDX.MIN_SCORE = tunedValue(files[TUNE_FILE], "idx");     // karneye göre eşik (yoksa varsayılan 3)
-  const today = nyParts().date, pre = [];
-  if (book) {
-    await settleIdeas(book, s => fetchChart(s, "1m", "5d")).catch(e => console.error("[15dk] karne:", e?.message || e));
+    if ((await closeTsOf(nyParts().date)) - Date.now() < 10 * 60e3) { console.log("[15dk] kapanışa < 10 dk."); return 3; }
   }
   const ev = await macroEvents().catch(() => []);
-  const { text, parts } = await buildIdx15(new Date(), { ev, pre });
-  if (!text) { console.log("[15dk] net fırsat yok — mesaj gönderilmedi."); return 0; }
-  const ok = await sendTG(text);
-  console.log(`[15dk] SPY/QQQ fikri ${ok ? "gönderildi" : "GÖNDERİLEMEDİ"}.`);
-  if (ok) {                                                       // karne defteri okunamasa da çıkış takibi + sanal emir çalışır
-    const now = Date.now();
-    const fresh = [];
-    for (const p of parts) {
-      if (!p.sig?.dir) continue;
-      const it = { src: "idx", sym: p.sym, dir: p.sig.dir, ts: now, S: p.sig.S, stop: p.sig.stop, target: p.sig.target, hor: HORIZON.idx,
-        score: Math.abs(p.sig.score), tstop: p.tstop ?? (p.expD === today ? 45 : 90), expClose: p.expClose,
-        ...(p.pick ? { occ: p.pick.sym, K: p.pick.K, exp: p.expD, prem: p.pick.prem, iv: +p.pick.iv.toFixed(4) } : {}) };
-      it.id = ideaId(it);
-      if (it.occ) {
-        it.paper = await paperBuy(it.occ, it.prem, it.id).catch(() => null);           // sanal hesapta gerçek emir
-        if (!it.paper) await warnPaperFail(sendTG, it.occ).catch(() => {});
-      }
-      if (book) addIdea(book, it);
-      fresh.push(it);
-    }
-    pushOpenLocal(fresh, now);                                    // çıkış takibi (ani hareket süreci okur)
-    if (book) { book.lastDay = today; book.lastTs = now; await saveFiles({ [IDEA_FILES.idx]: book }); }
+  const ok = await sendTG(await buildPlans(new Date(), { ev }));
+  console.log(`[15dk] plan ${ok ? "gönderildi" : "GÖNDERİLEMEDİ"}.`);
+  // Saatlik (10:30, 11:30 … 15:30 NY): en hacimli 25 hisse
+  if (process.env.FORCE === "1" || (mins % 60 >= 30 && mins % 60 < 45 && mins >= 630)) {
+    const h = await buildHourly(new Date()).catch(e => (console.error("[saatlik]", e?.message || e), null));
+    if (h) console.log(`[saatlik] ${(await sendTG(h)) ? "gönderildi" : "GÖNDERİLEMEDİ"}.`);
   }
   return ok ? 0 : 1;
 }

@@ -110,10 +110,19 @@ Beklenti: Alımda oynaklık primini sen ödersin, orta ölçekli hisselerin opsi
   - Ortak: pozisyon başına kolun %10'u (tek kontrat aşarsa %20'ye kadar 1 adet), en çok 8 açık, zarar durdurma −%50,
     kâr hedefi yok (test #4), giriş/çıkış orta ± %30 spread, günde bir canlı zincirle değerleme. İşlem mesajı her
     alım/satımda; kollar haftalık / aylık / 3 aylık **model portföy raporlarına** eklenir; `/portfoy`'da görünür.
-- **⏱ SPY/QQQ 15 dk opsiyon fikri (`bot/idx15.mjs`):** seans içinde 09:45–15:45 NY (TR kışın 17:45–23:45) her çeyrek saatte
-  tek mesaj. Yön skoru (5 dk mum): VWAP, EMA9/21, açılış aralığı kırılımı, son 15 dk ivmesi, günlük trend, VIX; aşırı RSI cezası.
-  |skor| ≥ 3 → CALL/PUT ALIM (14:30 NY'ye kadar 0DTE, sonra sonraki vade, delta ~0.45–0.50), değilse NÖTR. Stop/hedef dayanakta
-  1:2 (R = 1.5×ATR5dk), opsiyon karşılıkları Black-Scholes ile; olasılıklar dürüst (%33 kuramsal). Geriye dönük test edilmedi.
+- **⏱ 15 dk plan — SPY, QQQ, GLD, SLV (`bot/idx15.mjs` + `bot/plans.mjs`):** 09:45–15:45 NY her çeyrek saatte MUTLAKA mesaj.
+  Her sembol: eğilim (VWAP + EMA9/21) ve iki kırılım planı — CALL "son 30 dk tepesi üstü", PUT "son 30 dk dibi altı";
+  giriş / hedef (2R) / stop (R = max(ATR5dk, 30 dk aralığının yarısı)); eğilim yönünde kontrat (kapanışa > 90 dk varsa 0DTE).
+  Eski yön skoru 60 günlük ölçümde ≈ 0R çıktığı için kaldırıldı.
+- **🕐 Saatlik — en hacimli 25 hisse:** 10:30–15:30 NY her saat, tek satır plan (eğilim · CALL > giriş h hedef s stop · PUT <…);
+  kıpırdamayan (satın alma bekleyen vb.) hisseler elenir.
+- **🎯 Ölçülmüş gün içi kurulumlar (`bot/setups.mjs`, `research/intraday.mjs`):** trend geri çekilmesi, VWAP geri alma, açılış
+  düşüşünü sindirme, sektör genişliği itkisi her 5 dk mum kapanışında taranır; yalnız 1 yıllık Alpaca ölçümünü geçenler
+  (n ≥ 40, ort ≥ +0.15R, t ≥ 2; gün parçası bazında) anında gönderilir. Ölçüm haftalık + liste eskiyince kendiliğinden.
+- **🔄 Aşırı satım → hızlı dönüş (`bot/rebound.mjs`):** 15:30–15:50 NY günde 1; kaliteli (kârlı, nakit üreten), 200g üstü,
+  RSI(2) < 5 ve 20g ortalamanın 2 ATR altı → giriş kapanışa yakın, hedef 10g ortalama, stop −2 ATR, en çok 10 gün,
+  2–4 hafta call. Ölçüm (`research/rebound.mjs`, 2015 sonrası 100 likit hisse): ort. +%1.04 / 3.8 gün, kazanan %71
+  (rastgele gün +%0.27 / 2.5 gün). ⚠ Bugünkü S&P 500 üyeleriyle ölçüldü (hayatta kalan yanlılığı).
 - **⚡ Ani hareket / ani dönüş alarmı (`bot/fast.mjs`):** seans boyunca arka planda ~30 sn'de bir, 16 likit opsiyonlu sembolde
   (SPY, QQQ, IWM, NVDA, TSLA, AAPL, MSFT, AMZN, META, GOOGL, AMD, AVGO, NFLX, PLTR, COIN, MU; `FAST_SYMS` ile değişir) 1 dk mumlar.
   Son 5 dk getirisi normal oynaklığın ≥ 3.5σ katı + hacim ≥ 1.8× + 30 dk zirvesi/dibi kırıldı → **anında** CALL/PUT ALIM fikri

@@ -23,6 +23,8 @@ import { macroEvents, nearEvent, fmtNear } from "./macro.mjs";
 import { freshPrice, ageTxt } from "./liveaudit.mjs";
 import { paperBuy, paperClose, warnPaperFail } from "./optpaper.mjs";
 import { TUNE_FILE, tunedValue } from "./tune.mjs";
+import { dayFeatures, setupsAt, breadthSeries } from "./setups.mjs";
+import { SETUPS_FILE, allowedFor, SETUP_LABEL } from "./setuplive.mjs";
 import { pushOpenLocal, readOpenLocal, ideaId, checkExit, optValue, fmtExit } from "./exits.mjs";
 
 const ETFS = new Set(["SPY", "QQQ", "IWM", "DIA"]);
@@ -207,20 +209,73 @@ export async function monitorExits(st, book, now = Date.now(), toCloseMin = 999)
   return sent;
 }
 
+// ÖLÇÜLMÜŞ GÜN İÇİ KURULUMLAR (bot/setups.mjs): her yeni 5 dk mum kapanışında SPY/QQQ taranır (sektör genişliğiyle);
+// yalnız 1 yıllık ölçümü geçen kurulum × yön × gün parçası gönderilir (abd_setups.json). Diğerleri yalnız loga yazılır.
+const SET_SYMS = ["SPY", "QQQ"], SET_SECS = ["XLK", "XLF", "XLE", "XLV", "XLY", "XLP", "XLI", "XLB", "XLU", "XLRE", "XLC"];
+export async function scanSetups(st, now, toCloseMin, opts = {}) {
+  const { date: today } = nyParts(new Date(now)), sessStart = nyTs(today, 9, 30);
+  const k = Math.floor((now - sessStart) / 300e3);                          // tamamlanmış 5 dk mum sayısı
+  if (k < 7) return 0;
+  const key = `${today}|${k}`;
+  if (st.setKey === key) return 0;                                            // her mum kapanışında bir kez
+  let bars;
+  if (alpacaEnabled()) bars = await intradayBars([...SET_SYMS, ...SET_SECS], new Date(sessStart).toISOString(), "5Min").catch(() => null);
+  else bars = Object.fromEntries(await Promise.all(SET_SYMS.map(async s => [s, await fetchChart(s, "5m", "1d").catch(() => [])])));
+  if (!bars) return 0;
+  st.setKey = key;
+  const done = arr => (arr || []).filter(b => b.ts >= sessStart && b.ts + 300e3 <= now);
+  const sec = Object.fromEntries(SET_SECS.map(s => [s, done(bars[s])]).filter(([, a]) => a.length >= 8));
+  let sent = 0;
+  for (const sym of SET_SYMS) {
+    const bs = done(bars[sym]);
+    if (bs.length < 8 || bs.at(-1).ts < sessStart + (k - 1) * 300e3) continue;          // son mum eksik → bayat, karar yok
+    const f = dayFeatures(bs), i = bs.length - 1, mins = nyParts(new Date(bs[i].ts)).mins + 5;
+    const br = Object.keys(sec).length >= 8 ? breadthSeries(bs.map(b => b.ts), sec) : null;
+    for (const c of setupsAt(bs, f, i, mins, br)) {
+      const a = allowedFor(opts.allow, c.name, c.dir, mins);
+      if (!a) { console.log(`[kurulum] ${sym} ${c.name} ${c.dir} oluştu — ölçümde geçmedi, gönderilmedi`); continue; }
+      const ck = `${sym}|${c.name}|${c.dir}`;
+      if (now - ((st.setCd ||= {})[ck] || 0) < 30 * 60e3) continue;
+      const S = freshPrice((await liveQuotes([sym]).catch(() => ({})))[sym], now, 120e3) ?? bs[i].close;
+      const R = Math.abs(S - c.stop);
+      if ((c.dir === "C" ? S <= c.stop : S >= c.stop) || !(R > 0)) continue;         // fiyat stopu çoktan geçtiyse fikir yok
+      const target = +(c.dir === "C" ? S + 2 * R : S - 2 * R).toFixed(2), stop = +c.stop.toFixed(2);
+      const closeMs = now + (toCloseMin ?? 960 - mins) * 60e3, r = await riskFreeRate().catch(() => 0.04);
+      const cc = await contractIdea({ sym, dir: c.dir, S, stop, target, r, today, allow0: (closeMs - now) / 60e3 > 90, timeStop: capStop(a.hor, closeMs, now) });
+      const near = fmtNear(nearEvent(opts.ev, now), now);
+      const text = [`🎯 ${sym} ${c.dir === "C" ? "CALL" : "PUT"} AL — ${cc.contract}`, `   ${SETUP_LABEL[c.name][c.dir]} (ölçüm: ort +${a.m.toFixed(2)}R, ${a.n} örnek)`, ...cc.lines, ...(near ? ["   " + near] : [])].join("\n");
+      if (!(await sendTG(text))) continue;
+      st.setCd[ck] = now; sent++;
+      const it = { src: "setup", setup: c.name, sym, dir: c.dir, ts: now, S, stop, target, hor: a.hor, tstop: cc.timeStop, expClose: cc.expClose,
+        ...(cc.pick ? { occ: cc.pick.sym, K: cc.pick.K, exp: cc.expD, prem: cc.pick.prem, iv: +cc.pick.iv.toFixed(4) } : {}) };
+      it.id = ideaId(it);
+      if (it.occ) { it.paper = await paperBuy(it.occ, it.prem, it.id).catch(() => null); if (!it.paper) await warnPaperFail(sendTG, it.occ).catch(() => {}); }
+      if (opts.book) addIdea(opts.book, it);
+      pushOpenLocal([it], now);
+      console.log(`[kurulum] ${sym} ${c.name} ${c.dir} GÖNDERİLDİ`);
+    }
+  }
+  return sent;
+}
+
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 // Uzun yaşayan döngü: ~55 dk çalışır, sonra çıkar (iş akışı yeniden başlatır). FAST_ONCE=1 → tek tarama (test).
 async function main() {
   const once = process.env.FAST_ONCE === "1", t0 = Date.now();
   const st = loadSt();
-  let clk = null, clkAt = 0, book = null, bookAt = 0, ev = [], evAt = 0;
+  let clk = null, clkAt = 0, book = null, bookAt = 0, ev = [], evAt = 0, allow = [];
   do {
     try {
       // Karne defteri (kendi Gist dosyası): okunamazsa 10 dk sonra tekrar; ufku dolanlar 10 dk'da bir sonuçlandırılır
       if (Date.now() - bookAt > 10 * 60e3) {
         bookAt = Date.now();
         {                                                       // 10 dk'da bir: eşik dosyası (+ defter ilk kez)
-          const f = await loadFiles(book ? [TUNE_FILE] : [IDEA_FILES.fast, TUNE_FILE]).catch(() => READ_FAILED);
-          if (f !== READ_FAILED) { if (!book) book = f[IDEA_FILES.fast]; FAST.Z_BURST = tunedValue(f[TUNE_FILE], "fast"); }   // karneye göre σ eşiği
+          const f = await loadFiles(book ? [TUNE_FILE, SETUPS_FILE] : [IDEA_FILES.fast, TUNE_FILE, SETUPS_FILE]).catch(() => READ_FAILED);
+          if (f !== READ_FAILED) {
+            if (!book) book = f[IDEA_FILES.fast];
+            FAST.Z_BURST = tunedValue(f[TUNE_FILE], "fast");                       // karneye göre σ eşiği
+            allow = f[SETUPS_FILE]?.allow || [];                                    // ölçümü geçen kurulumlar
+          }
         }
         if (book && await settleIdeas(book, s => fetchChart(s, "1m", "5d")).catch(() => false)) await saveFiles({ [IDEA_FILES.fast]: book });
       }
@@ -231,6 +286,7 @@ async function main() {
       const toClose = clk?.nextClose ? (clk.nextClose - Date.now()) / 60e3 : 960 - mins;
       if ((open && mins >= 575 && toClose >= 10) || process.env.FORCE === "1") {
         if (await scanFast(st, Date.now(), toClose, { ev, book }) && book) await saveFiles({ [IDEA_FILES.fast]: book });
+        if (await scanSetups(st, Date.now(), toClose, { ev, book, allow }).catch(e => { console.error("[kurulum]", e?.message || e); return 0; }) && book) await saveFiles({ [IDEA_FILES.fast]: book });
         saveSt(st);
       }
       else if (once) console.log("[⚡] seans dışı.");

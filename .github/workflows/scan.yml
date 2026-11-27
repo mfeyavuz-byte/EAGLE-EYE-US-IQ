@@ -43,6 +43,14 @@ jobs:
         run: npm install --no-audit --no-fund --omit=dev
       - name: Birim testleri (bozuk kodla çalışma — hata alarmı tetiklenir)
         run: npm test
+      - name: Kurulum listesi güncel mi? (değilse gün içi araştırmayı başlat)
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_GIST_TOKEN: ${{ secrets.GH_GIST_TOKEN }}
+          GIST_ID: ${{ secrets.GIST_ID }}
+        run: |
+          if [ "$(node bot/checksetups.mjs)" = "STALE" ]; then gh workflow run intraday-research.yml --repo "$GITHUB_REPOSITORY" --ref main && echo "Araştırma başlatıldı."; else echo "Liste güncel."; fi
       - name: Kesintisiz döngü (tarama 10 dk · SPY/QQQ fikri 15 dk · ~5,5 saat)
         id: loop
         env:
