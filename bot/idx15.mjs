@@ -194,7 +194,7 @@ async function main() {
   if (process.env.FORCE !== "1") {
     if (wd === "Sat" || wd === "Sun" || mins < IDX.START || mins >= IDX.END) { console.log("[15dk] seans penceresi dışında."); return 3; }
     if (!(await isMarketOpen())) { console.log("[15dk] piyasa kapalı (tatil)."); return 3; }
-    if ((await closeTsOf(nyParts().date)) - Date.now() < 15 * 60e3) { console.log("[15dk] kapanışa < 15 dk — yeni fikir yok."); return 3; }
+    if ((await closeTsOf(nyParts().date)) - Date.now() < 10 * 60e3) { console.log("[15dk] kapanışa < 10 dk — yeni fikir yok."); return 3; }   // normal gün 15:45 fikri korunur
   }
   // Canlı karne: kendi Gist dosyası (okunamazsa karne bu sefer atlanır, fikir yine gönderilir)
   const files = await loadFiles([IDEA_FILES.idx, TUNE_FILE]);

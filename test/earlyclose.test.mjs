@@ -27,3 +27,15 @@ test("zaman stopu kapanışa göre kısalır; 27 Kasım QQQ 647C çıkış değe
   assert.ok(wrong > 1.0, `eski değer ${wrong}`);                    // mesajdaki ~$1.25 bu hatadan
   assert.ok(right < 0.5 && right >= 0.27, `doğru değer ${right}`);  // 5 dk kala ≈ içsel değer 0.27 + az zaman değeri
 });
+
+test("NORMAL GÜN: eski ve yeni kural aynı (0DTE kararı, kapanış 16:00); stop yalnız kapanışı aşacaksa kısalır", async () => {
+  const d = "2026-12-01", close = await closeTsOf(d);
+  assert.equal(close, nyTs(d, 16, 0));
+  for (let mins = 585; mins < 950; mins++) {
+    const now = nyTs(d, Math.floor(mins / 60), mins % 60);
+    assert.equal((close - now) / 60e3 > 90, mins < 870);                            // 0DTE kararı birebir aynı
+    const s = capStop(45, close, now);
+    if (now + 45 * 60e3 <= close - 5 * 60e3) assert.equal(s, 45);                    // kapanışı aşmıyorsa dokunulmaz
+  }
+  assert.ok(close - (nyTs(d, 15, 45) + 50e3) >= 10 * 60e3);                         // 15:45 fikri (birkaç sn gecikmeyle) verilir
+});
