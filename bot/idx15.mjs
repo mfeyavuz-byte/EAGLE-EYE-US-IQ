@@ -21,6 +21,8 @@ import { paperBuy, warnPaperFail } from "./optpaper.mjs";
 import { TUNE_FILE, tunedValue } from "./tune.mjs";
 import { pushOpenLocal, ideaId } from "./exits.mjs";
 import { tradePlan, fmtPlan, fmtPlanLine } from "./plans.mjs";
+import { gexFor, fmtGex } from "./gex.mjs";
+import { readInternals, fmtInternals } from "./setuplive.mjs";
 import { loadUniverse } from "../spot/scan.mjs";
 
 export const IDX = { SYMS: ["SPY", "QQQ"], START: 585, END: 950, ODTE_UNTIL: 870, MIN_SCORE: 3, R_ATR: 1.5, R_MIN: 0.0015, RR: 2, SLIP: 0.3, MAX_SPREAD: 0.15 };
@@ -221,11 +223,12 @@ export async function buildPlans(now = new Date(), extra = {}) {
       const c = await contractIdea({ sym, dir: p.trend === "↑" ? "C" : "P", S: side.entry, stop: side.stop, target: side.target, r, today, allow0: toClose > 90 }).catch(() => null);
       if (c?.pick) contract = c.contract;
     }
-    blocks.push(fmtPlan(sym, p, contract));
+    const gx = (sym === "SPY" || sym === "QQQ") ? fmtGex(await gexFor(sym, p.S, t).catch(() => null)) : null;
+    blocks.push(fmtPlan(sym, p, contract) + (gx ? "\n" + gx : ""));
   }
-  const near = fmtNear(nearEvent(extra.ev, t), t);
+  const near = fmtNear(nearEvent(extra.ev, t), t), inn = fmtInternals(readInternals(t));
   const hm = `${String(Math.floor(mins / 60)).padStart(2, "0")}:${String(mins % 60).padStart(2, "0")}`;
-  return [`⏱ ${hm} NY (${fmtTR(now).split(" ")[1]?.slice(0, 5) || ""} TR)`, ...(near ? [near] : []), ...blocks].join("\n");
+  return [`⏱ ${hm} NY (${fmtTR(now).split(" ")[1]?.slice(0, 5) || ""} TR)`, ...(inn ? [inn] : []), ...(near ? [near] : []), ...blocks].join("\n");
 }
 
 export async function buildHourly(now = new Date()) {

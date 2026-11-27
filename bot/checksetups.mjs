@@ -4,5 +4,5 @@ import { SETUPS_FILE } from "./setuplive.mjs";
 if (!gistEnabled()) { console.log("OK"); process.exit(0); }
 const f = await loadFiles([SETUPS_FILE]);
 if (f === READ_FAILED) { console.log("OK"); process.exit(0); }                    // okunamadı → bu sefer tetikleme
-const d = f[SETUPS_FILE]?.d;
-console.log(!d || Date.now() - Date.parse(d + "T00:00:00Z") > 8 * 864e5 ? "STALE" : "OK");
+const d = f[SETUPS_FILE]?.d, v2 = f[SETUPS_FILE] && "model" in f[SETUPS_FILE];      // eski biçim (walk-forward/model yok) → yenile
+console.log(!d || !v2 || Date.now() - Date.parse(d + "T00:00:00Z") > 8 * 864e5 ? "STALE" : "OK");

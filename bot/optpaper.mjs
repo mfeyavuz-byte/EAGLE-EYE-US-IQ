@@ -54,16 +54,26 @@ export function roundTrips(orders) {
     let q = f.qty;
     while (q > 0 && open[f.sym]?.length) {
       const b = open[f.sym][0], n = Math.min(q, b.qty);
-      trips.push({ sym: f.sym, qty: n, buy: b.px, sell: f.px, ret: b.px > 0 ? f.px / b.px - 1 : 0, pnl: (f.px - b.px) * n * 100, t: f.t });
+      trips.push({ sym: f.sym, qty: n, buy: b.px, sell: f.px, ret: b.px > 0 ? f.px / b.px - 1 : 0, pnl: (f.px - b.px) * n * 100, t: f.t, tenor: tenorOf(f.sym, b.t) });
       b.qty -= n; q -= n;
       if (!b.qty) open[f.sym].shift();
     }
   }
   const n = trips.length;
-  return { n, wins: trips.filter(t => t.pnl > 0).length, avgRet: n ? trips.reduce((a, t) => a + t.ret, 0) / n : null,
+  const byTenor = {};
+  for (const t of trips) { const x = (byTenor[t.tenor] ||= { n: 0, w: 0, ret: 0, pnl: 0 }); x.n++; x.w += t.pnl > 0 ? 1 : 0; x.ret += t.ret; x.pnl += t.pnl; }
+  return { byTenor, n, wins: trips.filter(t => t.pnl > 0).length, avgRet: n ? trips.reduce((a, t) => a + t.ret, 0) / n : null,
     pnl: trips.reduce((a, t) => a + t.pnl, 0), open: Object.values(open).reduce((a, l) => a + l.filter(x => x.qty > 0).length, 0), trips };
 }
 
+// Vade grubu: OCC sembolündeki vade (yymmdd) − alış günü → "0DTE" | "1–3 gün" | "4+ gün"
+export function tenorOf(occ, t) {
+  const m = String(occ).match(/(\d{6})[CP]\d{8}$/);
+  if (!m || !t) return "?";
+  const exp = Date.parse(`20${m[1].slice(0, 2)}-${m[1].slice(2, 4)}-${m[1].slice(4, 6)}T00:00:00Z`), d = Date.parse(String(t).slice(0, 10) + "T00:00:00Z");
+  const k = Math.round((exp - d) / 864e5);
+  return k <= 0 ? "0DTE" : k <= 3 ? "1–3 gün" : "4+ gün";
+}
 export async function paperOptReport(days = 30) {
   if (!optPaperEnabled()) return null;
   const after = new Date(Date.now() - days * 864e5).toISOString();
@@ -72,7 +82,8 @@ export async function paperOptReport(days = 30) {
   const s = roundTrips(orders);
   if (!s.n) return `🧾 Sanal opsiyon hesabı (Alpaca paper, ${days} gün): henüz kapanmış işlem yok${s.open ? ` · açık ${s.open}` : ""}.`;
   return `🧾 Sanal opsiyon hesabı (Alpaca paper, GERÇEK dolumlar, ${days} gün): ${s.n} işlem · kazanan %${Math.round(s.wins / s.n * 100)} · ` +
-    `ort. ${s.avgRet >= 0 ? "+" : ""}${(s.avgRet * 100).toFixed(1)}% · net ${s.pnl >= 0 ? "+" : "−"}$${Math.abs(Math.round(s.pnl)).toLocaleString("en-US")}${s.open ? ` · açık ${s.open}` : ""}`;
+    `ort. ${s.avgRet >= 0 ? "+" : ""}${(s.avgRet * 100).toFixed(1)}% · net ${s.pnl >= 0 ? "+" : "−"}${Math.abs(Math.round(s.pnl)).toLocaleString("en-US")}${s.open ? ` · açık ${s.open}` : ""}` +
+    "\n   Vadeye göre: " + Object.entries(s.byTenor).map(([k, x]) => `${k} ${x.n} işlem, ort. ${x.ret / x.n >= 0 ? "+" : ""}${(x.ret / x.n * 100).toFixed(0)}%, net ${x.pnl >= 0 ? "+" : "−"}${Math.abs(Math.round(x.pnl))}`).join(" · ");
 }
 
 // Yarım kalan girişi geri al: emir dolmadıysa iptal, dolduysa pozisyonu kapat

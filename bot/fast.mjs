@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { nyParts, isRegularHours, fmtTR } from "../data/market.mjs";
 import { intradayBars, liveQuotes, alpacaEnabled, marketClock } from "../data/alpaca.mjs";
-import { fetchChart, riskFreeRate } from "../data/yahoo.mjs";
+import { fetchChart, fetchDaily, riskFreeRate } from "../data/yahoo.mjs";
 import { contractIdea, nyTs, IDX, capStop } from "./idx15.mjs";
 import { closeTsOf } from "../data/market.mjs";
 import { sendTG } from "./telegram.mjs";
@@ -23,8 +23,8 @@ import { macroEvents, nearEvent, fmtNear } from "./macro.mjs";
 import { freshPrice, ageTxt } from "./liveaudit.mjs";
 import { paperBuy, paperClose, warnPaperFail } from "./optpaper.mjs";
 import { TUNE_FILE, tunedValue } from "./tune.mjs";
-import { dayFeatures, setupsAt, breadthSeries } from "./setups.mjs";
-import { SETUPS_FILE, allowedFor, SETUP_LABEL } from "./setuplive.mjs";
+import { dayFeatures, setupsAt, breadthSeries, dayType, features } from "./setups.mjs";
+import { SETUPS_FILE, allowedFor, SETUP_LABEL, MEMBERS, modelCheck, INTERNALS_FILE } from "./setuplive.mjs";
 import { pushOpenLocal, readOpenLocal, ideaId, checkExit, optValue, fmtExit } from "./exits.mjs";
 
 const ETFS = new Set(["SPY", "QQQ", "IWM", "DIA"]);
@@ -153,7 +153,8 @@ export async function scanFast(st, now = Date.now(), toCloseMin = null, opts = {
   const hh = String(Math.floor(mins / 60)).padStart(2, "0"), mm = String(mins % 60).padStart(2, "0");
   let sent = 0;
   for (const [i, { sym, sig }] of top.entries()) {
-    const allow0 = ETFS.has(sym) && (toCloseMin ?? 960 - mins) > 90;
+    // A/B: 0DTE'ye izin varken fikirler sırayla 0DTE / sonraki vade → sanal hesapta hangisi daha iyi, ölçülür
+    const allow0 = ETFS.has(sym) && (toCloseMin ?? 960 - mins) > 90 && (st.ab = !st.ab);
     const closeMs = now + (toCloseMin ?? 960 - mins) * 60e3;                 // gerçek kapanış (erken kapanış dahil)
     const c = await contractIdea({ sym, dir: sig.dir, S: sig.S, stop: sig.stop, target: sig.target, r, today, allow0, timeStop: capStop(30, closeMs, now) });
     const title = sig.kind === "burst" ? (sig.dir === "C" ? "⚡ Ani yükseliş" : "⚡ Ani düşüş") : (sig.dir === "C" ? "↩️ Dipten dönüş" : "↩️ Tepeden dönüş");
@@ -219,21 +220,36 @@ export async function scanSetups(st, now, toCloseMin, opts = {}) {
   const key = `${today}|${k}`;
   if (st.setKey === key) return 0;                                            // her mum kapanışında bir kez
   let bars;
-  if (alpacaEnabled()) bars = await intradayBars([...SET_SYMS, ...SET_SECS], new Date(sessStart).toISOString(), "5Min").catch(() => null);
+  if (alpacaEnabled()) bars = await intradayBars([...SET_SYMS, ...SET_SECS, ...MEMBERS], new Date(sessStart).toISOString(), "5Min").catch(() => null);
   else bars = Object.fromEntries(await Promise.all(SET_SYMS.map(async s => [s, await fetchChart(s, "5m", "1d").catch(() => [])])));
   if (!bars) return 0;
   st.setKey = key;
   const done = arr => (arr || []).filter(b => b.ts >= sessStart && b.ts + 300e3 <= now);
   const sec = Object.fromEntries(SET_SECS.map(s => [s, done(bars[s])]).filter(([, a]) => a.length >= 8));
+  const mem = Object.fromEntries(MEMBERS.map(s => [s, done(bars[s])]).filter(([, a]) => a.length >= 3));
+  // Dünkü seviyeler + günlük ATR (günde 1 kez)
+  if (st.lvDay !== today) {
+    st.lv = {};
+    for (const sym of SET_SYMS) {
+      const d = (await fetchDaily(sym).catch(() => [])).filter(r => nyParts(new Date(r.ts)).date < today);
+      if (d.length > 15) { const y = d.at(-1), rg = d.slice(-14).map(r => r.high - r.low); st.lv[sym] = { pdh: y.high, pdl: y.low, pdc: y.close, dATR: rg.reduce((a, b) => a + b, 0) / rg.length }; }
+    }
+    st.lvDay = today;
+  }
   let sent = 0;
   for (const sym of SET_SYMS) {
     const bs = done(bars[sym]);
     if (bs.length < 8 || bs.at(-1).ts < sessStart + (k - 1) * 300e3) continue;          // son mum eksik → bayat, karar yok
     const f = dayFeatures(bs), i = bs.length - 1, mins = nyParts(new Date(bs[i].ts)).mins + 5;
-    const br = Object.keys(sec).length >= 8 ? breadthSeries(bs.map(b => b.ts), sec) : null;
-    for (const c of setupsAt(bs, f, i, mins, br)) {
-      const a = allowedFor(opts.allow, c.name, c.dir, mins);
-      if (!a) { console.log(`[kurulum] ${sym} ${c.name} ${c.dir} oluştu — ölçümde geçmedi, gönderilmedi`); continue; }
+    const ts = bs.map(b => b.ts), lv = st.lv?.[sym] || {};
+    const br = Object.keys(sec).length >= 8 ? breadthSeries(ts, sec) : null, mb = Object.keys(mem).length >= 25 ? breadthSeries(ts, mem) : null;
+    const dt = dayType(bs, i, lv.dATR);
+    if (sym === "SPY") writeInternals({ ts: now, mb: mb?.at(-1) ?? null, br: br?.at(-1) ?? null, dt, up: upCount(mem, ts.at(-1)) });
+    for (const c of setupsAt(bs, f, i, mins, br, { pdh: lv.pdh, pdl: lv.pdl, pdc: lv.pdc, mb })) {
+      const a = allowedFor(opts.allow, c.name, c.dir, mins, dt);
+      if (!a) { console.log(`[kurulum] ${sym} ${c.name} ${c.dir} (${dt}) oluştu — ölçümde geçmedi, gönderilmedi`); continue; }
+      const mc = modelCheck(opts.model, features(bs, f, i, mins, c, { br, mb, pdc: lv.pdc, dATR: lv.dATR, dt }));
+      if (!mc.ok) { console.log(`[kurulum] ${sym} ${c.name} ${c.dir} model olasılığı %${Math.round(mc.p * 100)} < eşik → gönderilmedi`); continue; }
       const ck = `${sym}|${c.name}|${c.dir}`;
       if (now - ((st.setCd ||= {})[ck] || 0) < 30 * 60e3) continue;
       const S = freshPrice((await liveQuotes([sym]).catch(() => ({})))[sym], now, 120e3) ?? bs[i].close;
@@ -241,9 +257,9 @@ export async function scanSetups(st, now, toCloseMin, opts = {}) {
       if ((c.dir === "C" ? S <= c.stop : S >= c.stop) || !(R > 0)) continue;         // fiyat stopu çoktan geçtiyse fikir yok
       const target = +(c.dir === "C" ? S + 2 * R : S - 2 * R).toFixed(2), stop = +c.stop.toFixed(2);
       const closeMs = now + (toCloseMin ?? 960 - mins) * 60e3, r = await riskFreeRate().catch(() => 0.04);
-      const cc = await contractIdea({ sym, dir: c.dir, S, stop, target, r, today, allow0: (closeMs - now) / 60e3 > 90, timeStop: capStop(a.hor, closeMs, now) });
+      const cc = await contractIdea({ sym, dir: c.dir, S, stop, target, r, today, allow0: (closeMs - now) / 60e3 > 90 && (st.ab = !st.ab), timeStop: capStop(a.hor, closeMs, now) });
       const near = fmtNear(nearEvent(opts.ev, now), now);
-      const text = [`🎯 ${sym} ${c.dir === "C" ? "CALL" : "PUT"} AL — ${cc.contract}`, `   ${SETUP_LABEL[c.name][c.dir]} (ölçüm: ort +${a.m.toFixed(2)}R, ${a.n} örnek)`, ...cc.lines, ...(near ? ["   " + near] : [])].join("\n");
+      const text = [`🎯 ${sym} ${c.dir === "C" ? "CALL" : "PUT"} AL — ${cc.contract}`, `   ${SETUP_LABEL[c.name][c.dir]} (test: ort +${a.m.toFixed(2)}R${mc.p != null ? ` · olasılık %${Math.round(mc.p * 100)}` : ""})`, ...cc.lines, ...(near ? ["   " + near] : [])].join("\n");
       if (!(await sendTG(text))) continue;
       st.setCd[ck] = now; sent++;
       const it = { src: "setup", setup: c.name, sym, dir: c.dir, ts: now, S, stop, target, hor: a.hor, tstop: cc.timeStop, expClose: cc.expClose,
@@ -258,12 +274,21 @@ export async function scanSetups(st, now, toCloseMin, opts = {}) {
   return sent;
 }
 
+// Piyasa içi özet (15 dk mesajı okur): aynı makinede yerel dosya
+function writeInternals(o) { try { writeFileSync(INTERNALS_FILE, JSON.stringify(o)); } catch {} }
+// Son 5 dk mumunu yükselişle kapatan büyük hisse sayısı / toplam
+function upCount(mem, ts) {
+  let u = 0, n = 0;
+  for (const arr of Object.values(mem)) { const b = arr.find(x => x.ts === ts); if (b) { n++; if (b.close > b.open) u++; } }
+  return n ? { u, n } : null;
+}
+
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 // Uzun yaşayan döngü: ~55 dk çalışır, sonra çıkar (iş akışı yeniden başlatır). FAST_ONCE=1 → tek tarama (test).
 async function main() {
   const once = process.env.FAST_ONCE === "1", t0 = Date.now();
   const st = loadSt();
-  let clk = null, clkAt = 0, book = null, bookAt = 0, ev = [], evAt = 0, allow = [];
+  let clk = null, clkAt = 0, book = null, bookAt = 0, ev = [], evAt = 0, allow = [], model = null;
   do {
     try {
       // Karne defteri (kendi Gist dosyası): okunamazsa 10 dk sonra tekrar; ufku dolanlar 10 dk'da bir sonuçlandırılır
@@ -275,6 +300,7 @@ async function main() {
             if (!book) book = f[IDEA_FILES.fast];
             FAST.Z_BURST = tunedValue(f[TUNE_FILE], "fast");                       // karneye göre σ eşiği
             allow = f[SETUPS_FILE]?.allow || [];                                    // ölçümü geçen kurulumlar
+            model = f[SETUPS_FILE]?.model || null;                                  // olasılık modeli (yalnız testte işe yaradıysa "use")
           }
         }
         if (book && await settleIdeas(book, s => fetchChart(s, "1m", "5d")).catch(() => false)) await saveFiles({ [IDEA_FILES.fast]: book });
@@ -286,7 +312,7 @@ async function main() {
       const toClose = clk?.nextClose ? (clk.nextClose - Date.now()) / 60e3 : 960 - mins;
       if ((open && mins >= 575 && toClose >= 10) || process.env.FORCE === "1") {
         if (await scanFast(st, Date.now(), toClose, { ev, book }) && book) await saveFiles({ [IDEA_FILES.fast]: book });
-        if (await scanSetups(st, Date.now(), toClose, { ev, book, allow }).catch(e => { console.error("[kurulum]", e?.message || e); return 0; }) && book) await saveFiles({ [IDEA_FILES.fast]: book });
+        if (await scanSetups(st, Date.now(), toClose, { ev, book, allow, model }).catch(e => { console.error("[kurulum]", e?.message || e); return 0; }) && book) await saveFiles({ [IDEA_FILES.fast]: book });
         saveSt(st);
       }
       else if (once) console.log("[⚡] seans dışı.");

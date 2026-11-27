@@ -58,3 +58,14 @@ test("bilanço: gerçek tepki, ATM straddle, saat, tarih", () => {
   assert.equal(yahooTiming(Date.parse("2026-10-28T11:00:00Z") / 1e3).when, "bmo");
   assert.equal(usDate("7/29/2026"), "2026-07-29"); assert.equal(timeOf("time-after-hours"), "amc"); assert.equal(timeOf("time-not-supplied"), null);
 });
+
+test("sanal karne vadeye göre ayrılır (0DTE / 1–3 gün / 4+ gün)", async () => {
+  const { tenorOf } = await import("../bot/optpaper.mjs");
+  assert.equal(tenorOf("SPY261127C00726000", "2026-11-27T15:00:00Z"), "0DTE");
+  assert.equal(tenorOf("SPY261130C00726000", "2026-11-27T15:00:00Z"), "1–3 gün");
+  assert.equal(tenorOf("SPY261204P00700000", "2026-11-27T15:00:00Z"), "4+ gün");
+  const o = (side, px, t, sym) => ({ asset_class: "us_option", status: "filled", symbol: sym, side, filled_qty: "1", filled_avg_price: String(px), filled_at: t });
+  const s = roundTrips([o("buy", 1, "2026-11-27T15:00:00Z", "SPY261127C00726000"), o("sell", 2, "2026-11-27T15:30:00Z", "SPY261127C00726000"),
+    o("buy", 2, "2026-11-27T15:00:00Z", "SPY261204C00726000"), o("sell", 1, "2026-11-27T16:00:00Z", "SPY261204C00726000")]);
+  assert.equal(s.byTenor["0DTE"].n, 1); assert.equal(s.byTenor["4+ gün"].n, 1); assert.ok(s.byTenor["0DTE"].pnl > 0 && s.byTenor["4+ gün"].pnl < 0);
+});

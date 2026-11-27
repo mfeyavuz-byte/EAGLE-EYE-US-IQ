@@ -1,6 +1,6 @@
 name: Gün içi kurulum araştırması
 
-# SPY/QQQ 5 dk kurulumları (trend geri çekilmesi, VWAP geri alma, açılış düşüşü sindirme, genişlik itkisi) 1 yıllık Alpaca
+# SPY/QQQ 5 dk kurulumları (geri çekilme, VWAP, açılış, genişlik, dünkü seviyeler, boşluk, büyük hisse genişliği) 2 yıllık Alpaca
 # SIP verisiyle ölçülür; eşiği geçenler (n ≥ 40, ort ≥ +0.15R, t ≥ 2) Gist'e yazılır → canlı bot YALNIZ bunları gönderir.
 # Haftalık kendiliğinden (Pazar) + liste yoksa/8 günden eskiyse ana bot zinciri tetikler + elle.
 on:
@@ -10,7 +10,7 @@ on:
     inputs:
       days:
         description: "Kaç günlük geçmiş"
-        default: "365"
+        default: "730"
 
 jobs:
   research:
@@ -27,7 +27,7 @@ jobs:
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
           GH_GIST_TOKEN: ${{ secrets.GH_GIST_TOKEN }}
           GIST_ID: ${{ secrets.GIST_ID }}
-          INTRA_DAYS: ${{ inputs.days || '365' }}
+          INTRA_DAYS: ${{ inputs.days || '730' }}
         run: |
           set -o pipefail
           node research/intraday.mjs | tee out.txt

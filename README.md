@@ -119,6 +119,15 @@ Beklenti: Alımda oynaklık primini sen ödersin, orta ölçekli hisselerin opsi
 - **🎯 Ölçülmüş gün içi kurulumlar (`bot/setups.mjs`, `research/intraday.mjs`):** trend geri çekilmesi, VWAP geri alma, açılış
   düşüşünü sindirme, sektör genişliği itkisi her 5 dk mum kapanışında taranır; yalnız 1 yıllık Alpaca ölçümünü geçenler
   (n ≥ 40, ort ≥ +0.15R, t ≥ 2; gün parçası bazında) anında gönderilir. Ölçüm haftalık + liste eskiyince kendiliğinden.
+- **📊 Piyasa içi + gün tipi + gamma (15 dk mesajında):** S&P'nin en büyük 50 hissesinin VWAP üstü oranı ve son 5 dk yükselen
+  sayısı (TICK benzeri), sektör genişliği; gün tipi 10:30 NY'den sonra (trend↑/trend↓/yatay/karışık — ilk saat aralığı ÷ günlük
+  ATR ve itki); SPY/QQQ GEX seviyeleri (`bot/gex.mjs`: gamma dönüşü, call duvarı üstte, put duvarı altta; 30 dk önbellek).
+- **🧪 Walk-forward araştırma (`research/intraday.mjs`, haftalık + liste eski/biçimi eskiyse otomatik):** 2 yıl Alpaca SIP 5 dk;
+  kurulumlar: geri çekilme, VWAP, açılış, sektör genişliği, dünkü tepe/dip kırılımı, boşluk kapanışı, 50 büyük hisse genişliği.
+  İlk %60 gün EĞİTİM, son %40 TEST; canlıya yalnız ikisinde de geçen kurulum × yön × ufuk × gün parçası × gün tipi grubu alınır.
+  Lojistik olasılık modeli (16 ölçü) testte AUC ≥ 0.55 ve eşik üstü kârlıysa kullanılır; mesajda "olasılık %X".
+- **🅰️/🅱️ Vade karşılaştırması:** 0DTE'ye izin varken fikirler sırayla 0DTE / sonraki vade alınır; sanal (paper) karne vade
+  grubuna göre (0DTE · 1–3 gün · 4+ gün) gerçek dolumlarla raporlanır.
 - **🔄 Aşırı satım → hızlı dönüş (`bot/rebound.mjs`):** 15:30–15:50 NY günde 1; kaliteli (kârlı, nakit üreten), 200g üstü,
   RSI(2) < 5 ve 20g ortalamanın 2 ATR altı → giriş kapanışa yakın, hedef 10g ortalama, stop −2 ATR, en çok 10 gün,
   2–4 hafta call. Ölçüm (`research/rebound.mjs`, 2015 sonrası 100 likit hisse): ort. +%1.04 / 3.8 gün, kazanan %71

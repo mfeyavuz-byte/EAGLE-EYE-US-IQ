@@ -58,3 +58,39 @@ test("canlı izin listesi: yalnız eşiği geçen kurulum/yön/gün parçası; e
   assert.ok(allowedFor(a, "RECLAIM", "C", 900)); assert.equal(allowedFor([], "RECLAIM", "C", 900), null);
   assert.equal(partOf(689), "sabah"); assert.equal(partOf(700), "öğle"); assert.equal(partOf(900), "öğleden sonra");
 });
+
+test("gün tipi, yeni kurulumlar (dünkü tepe, boşluk), model ve gamma", async () => {
+  const { dayType, setupsAt, dayFeatures, fitLogit, predLogit, auc, features, FEAT_NAMES } = await import("../bot/setups.mjs");
+  const { gexLevels } = await import("../bot/gex.mjs");
+  const { allowedFor, dtGroup, modelCheck } = await import("../bot/setuplive.mjs");
+  const up = Array.from({ length: 14 }, (_, i) => ({ ts: i, open: 100 + i * 0.2, high: 100 + i * 0.2 + 0.25, low: 100 + i * 0.2 - 0.05, close: 100 + i * 0.2 + 0.2, volume: 1 }));
+  assert.equal(dayType(up, 13, 4), "trend↑"); assert.equal(dayType(up, 5, 4), "erken");
+  const flat = up.map((b, i) => ({ ...b, open: 100, high: 100.3, low: 99.8, close: 100 + (i % 2) * 0.1 }));
+  assert.equal(dayType(flat, 13, 4), "yatay");
+  // Dünkü tepenin İLK kırılımı
+  const bars = up.map(b => ({ ...b })), f = dayFeatures(bars);
+  const pdhSet = setupsAt(bars, f, 13, 640, null, { pdh: bars[12].close + 0.01 });
+  assert.ok(pdhSet.some(x => x.name === "PDH" && x.dir === "C"));
+  // Aşağı boşluk kapanışı (dünkü kapanış geri alındı)
+  const g = Array.from({ length: 10 }, (_, i) => ({ ts: i, open: 99 + i * 0.12, high: 99 + i * 0.12 + 0.15, low: 99 + i * 0.12 - 0.1, close: 99 + i * 0.12 + 0.1, volume: 1 }));
+  assert.ok(setupsAt(g, dayFeatures(g), 9, 620, null, { pdc: 100.1 }).some(x => x.name === "GAP" && x.dir === "C"));
+  // Lojistik model öğrenebiliyor
+  const X = [], y = [];
+  for (let k = 0; k < 400; k++) { const v = (k % 20) / 10 - 1; X.push([1, v]); y.push(v > 0 ? 1 : 0); }
+  const w = fitLogit(X, y, { iters: 300, lr: 0.5 });
+  assert.ok(predLogit(w, [1, 0.8]) > 0.7 && predLogit(w, [1, -0.8]) < 0.3);
+  assert.ok(auc(X.map(x => predLogit(w, x)), y) > 0.95);
+  assert.equal(features(up, dayFeatures(up), 13, 640, { name: "PDH", dir: "C" }, { dt: "trend↑" }).length, FEAT_NAMES.length);
+  assert.deepEqual(modelCheck(null, [1]), { p: null, ok: true });
+  assert.equal(modelCheck({ use: true, w: [-5], thr: 0.5 }, [1]).ok, false);
+  // Gün tipi grubuna göre izin
+  const allow = [{ name: "PULLBACK", dir: "C", hor: 30, part: "tümü", dtg: "lehte", m: 0.2 }];
+  assert.ok(allowedFor(allow, "PULLBACK", "C", 700, "trend↑")); assert.equal(allowedFor(allow, "PULLBACK", "C", 700, "yatay"), null);
+  assert.equal(dtGroup("trend↓", "C"), "aleyhte");
+  // Gamma: call duvarı fiyatın üstünde, put duvarı altında
+  const legs = [];
+  for (const K of [95, 97, 99, 100, 101, 103, 105]) { legs.push({ K, oi: K === 103 ? 9000 : 1000, iv: 0.2, T: 10 / 365, type: "C" }); legs.push({ K, oi: K === 97 ? 9000 : 1000, iv: 0.2, T: 10 / 365, type: "P" }); }
+  const lv = gexLevels(legs, 100);
+  assert.equal(lv.callWall, 103); assert.equal(lv.putWall, 97);
+  assert.equal(gexLevels([], 100), null);
+});
