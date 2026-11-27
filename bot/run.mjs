@@ -42,6 +42,11 @@ import { tuneAll, fmtTune, TUNE_FILE } from "./tune.mjs";
 import { paperBuy, paperClose, paperQty, paperUnwind, warnPaperFail } from "./optpaper.mjs";
 import { buildEarnings, straddleValue, fmtEarnBook, ER } from "./earnings.mjs";
 import { reboundSignal, fmtRebound, REB } from "./rebound.mjs";
+import { PREFS_FILE, isOn, applyPrefCmd, applyAcctCmd, prefsButtons } from "./prefs.mjs";
+import { parseBuy, checkPos, fmtPositions } from "./mypos.mjs";
+import { pmMovers, fmtPmMovers, fmtEod } from "./daily.mjs";
+import { paperTrips } from "./optpaper.mjs";
+import { closeTsOf, nyTs } from "../data/market.mjs";
 import { weakQuality } from "./edge.mjs";
 import { pickTenor } from "./morning.mjs";
 import { earningsOn, reportDates } from "../data/nasdaq.mjs";
@@ -74,6 +79,94 @@ async function reboundStep(st, today, all) {
   if (txt) await sendTG(txt);
   console.log(`[Dönüş] aday ${cands.length} · kaliteli ${out.length}`);
 }
+// ---------- Kullanıcı komutları: ayarlar, hesap, pozisyonlar ----------
+export async function userCommand(st, cmd, args) {
+  if (cmd === "/ayarlar") {
+    const r = applyPrefCmd(st.prefs, args);
+    if (r.changed) { st.prefs = r.p; st.prefsDirty = true; }
+    await sendTG(r.msg, { buttons: prefsButtons(r.p) });
+    return true;
+  }
+  if (cmd === "/hesap") {
+    const r = applyAcctCmd(st.prefs, args);
+    if (r.changed) { st.prefs = r.p; st.prefsDirty = true; }
+    await sendTG(r.msg);
+    return true;
+  }
+  if (cmd === "/aldim") {
+    const today = nyDate(), pos = parseBuy(args, today);
+    if (pos.err) { await sendTG(pos.err); return true; }
+    const ch0 = await optionChain(pos.sym).catch(() => null);
+    const exps = (ch0?.expirations || []).map(e => ({ e, d: new Date(e * 1e3).toISOString().slice(0, 10) })).filter(x => x.d >= today);
+    // Vade yazılmadıysa en yakın vade — bugünün seansı kapandıysa bugünkü (süresi dolmuş) vade atlanır
+    const closedToday = Date.now() >= (await closeTsOf(today));
+    const ex = pos.exp ? exps.find(x => x.d === pos.exp) : exps.find(x => !(closedToday && x.d === today));
+    if (!ex) { await sendTG(`⚠ ${pos.sym} için ${pos.exp || "yakın"} vadeli opsiyon bulunamadı. Vadeyi gg.aa yaz: /aldim ${pos.sym} ${pos.K}${pos.type} 05.12 ${pos.px}`); return true; }
+    const ch = ex.e === ch0.exp ? ch0 : await optionChain(pos.sym, ex.e).catch(() => null);
+    const leg = (pos.type === "C" ? ch?.calls : ch?.puts)?.find(o => o.strike === pos.K);
+    if (!leg) { await sendTG(`⚠ ${pos.sym} ${pos.K}${pos.type} ${ex.d} kontratı bulunamadı — strike'ı kontrol et.`); return true; }
+    Object.assign(pos, { exp: ex.d, expTs: ex.e, id: `${pos.sym}-${pos.K}${pos.type}-${ex.d}-${Date.now()}`, t: Date.now(), alerts: {} });
+    (st.mypos ||= []).push(pos);
+    await sendTG(`📌 Takipte: ${pos.sym} ${pos.K}${pos.type} ${ex.d.slice(8, 10)}.${ex.d.slice(5, 7)} ×${pos.qty} @ $${pos.px}${pos.tgtU ? ` · hedef ${pos.tgtU}` : ""}${pos.stopU ? ` · stop ${pos.stopU}` : ""}\nUyarılar: prim −%50 · +%100${pos.tgtU || pos.stopU ? " · dayanak hedef/stop" : ""} · vade günü kapanışa 30 dk. Kapatınca: /sattim ${pos.sym} ${pos.K}${pos.type}`);
+    return true;
+  }
+  if (cmd === "/sattim") {
+    const sym = String(args[0] || "").toUpperCase(), km = String(args[1] || "").toUpperCase().match(/^(\d+(?:\.\d+)?)([CP])$/);
+    const i = (st.mypos || []).findIndex(p => p.sym === sym && (!km || (p.K === +km[1] && p.type === km[2])));
+    if (i < 0) { await sendTG("Pozisyon bulunamadı. Kullanım: /sattim SPY 728C [satış fiyatı]"); return true; }
+    const p = st.mypos.splice(i, 1)[0], sell = +String(args[2] || "").replace(",", ".");
+    await sendTG(`✔ ${p.sym} ${p.K}${p.type} takipten çıkarıldı${sell > 0 ? ` · sonuç ${sell >= p.px ? "+" : "−"}%${Math.abs(Math.round((sell / p.px - 1) * 100))} (${sell >= p.px ? "+" : "−"}$${Math.abs(Math.round((sell - p.px) * 100 * p.qty))})` : ""}.`);
+    return true;
+  }
+  if (cmd === "/pozisyonlarim") { await sendTG(fmtPositions(st.mypos, await myPosValues(st.mypos))); return true; }
+  return false;
+}
+async function myPosValues(list) {
+  const vals = {}, cache = {};
+  for (const p of list || []) {
+    const k = `${p.sym}|${p.expTs}`;
+    cache[k] ??= await optionChain(p.sym, p.expTs).catch(() => null);
+    const o = (p.type === "C" ? cache[k]?.calls : cache[k]?.puts)?.find(x => x.strike === p.K);
+    if (o && o.bid > 0 && o.ask >= o.bid) vals[p.id] = (o.bid + o.ask) / 2;
+  }
+  return vals;
+}
+// Seans içinde (~10 dk): pozisyon uyarıları
+export async function myPosStep(st, today) {
+  if (!st.mypos?.length) return;
+  st.mypos = st.mypos.filter(p => p.exp >= today);                                     // vadesi geçenler düşer
+  if (!isOn(st.prefs, "pozisyon")) return;
+  const vals = await myPosValues(st.mypos), live = await liveQuotes([...new Set(st.mypos.map(p => p.sym))]).catch(() => ({}));
+  const toClose = ((await closeTsOf(today)) - Date.now()) / 60e3;
+  for (const p of st.mypos) {
+    const S = freshPrice(live[p.sym], Date.now(), 5 * 60e3) ?? (await quoteNow(p.sym).catch(() => null))?.price;
+    for (const a of checkPos(p, { mid: vals[p.id], S, toCloseMin: toClose, today })) if (await sendTG(a.text)) (p.alerts ||= {})[a.key] = Date.now();
+  }
+}
+// Açılış öncesi (09:00–09:25 NY, günde 1): en likit 400 hisse içinde ön piyasada en çok açılan 8 (Alpaca IEX canlı)
+async function premarketStep(st) {
+  const { mins, wd } = nyParts(), today = nyDate();
+  if (st.pmDay === today || mins < 540 || mins >= 565 || wd === "Sat" || wd === "Sun" || !alpacaEnabled()) return;
+  st.pmDay = today;
+  if (!isOn(st.prefs, "premarket") || (await isTradingDay(today)) === false) return;
+  const syms = Object.entries(UNI.meta || {}).filter(([, m]) => m?.dv > 0).sort((a, b) => b[1].dv - a[1].dv).slice(0, 400).map(([s]) => s);
+  const q = await liveQuotes(syms).catch(() => ({}));
+  const list = pmMovers(q, Date.now(), 8);
+  if (!list.length) return;
+  for (const x of list) x.news = (await news(x.sym, 1).catch(() => []))[0]?.headline || null;
+  await sendTG(fmtPmMovers(list));
+}
+// Gün sonu (16:05–18:00 NY, günde 1): tek satır karne
+async function eodStep(st, books) {
+  const { mins, wd } = nyParts(), today = nyDate();
+  if (st.eodDay === today || mins < 965 || mins > 1080 || wd === "Sat" || wd === "Sun") return;
+  st.eodDay = today;
+  if (!isOn(st.prefs, "gunsonu") || (await isTradingDay(today)) === false) return;
+  const d0 = nyTs(today, 0, 0), ideas = (books?.fast?.ideas || []).filter(it => it.ts >= d0);
+  const paper = await paperTrips(1).catch(() => null);
+  await sendTG(fmtEod(ideas, paper));
+}
+
 async function nextTradingDay(today) {
   for (let k = 1; k <= 6; k++) {
     const d = shiftDays(today, k), wd = new Date(d + "T12:00:00Z").getUTCDay();
@@ -100,7 +193,7 @@ async function earningsStep(st, today, mins) {
     }
   }
   // Giriş: günde 1, 15:00–15:50 NY
-  if (st.earn.day === today || mins < 900 || mins >= 950) return;
+  if (st.earn.day === today || mins < 900 || mins >= 950 || !isOn(st.prefs, "bilanco")) return;
   const nextDay = await nextTradingDay(today);
   const { text, buys } = await buildEarnings(today, nextDay, { earningsOn, reportDates, optionChain, fetchDaily, inUniverse: s => SYMS.includes(s) });
   if (text && !(await sendTG(text))) return;                                // alınacak yoksa mesaj yok
@@ -218,7 +311,9 @@ const HELP = [
   "/etf — SPY/QQQ kısa vade call/put sinyalinin durumu + ETF karnesi",
   "/sabah — açılış öncesi SPY/QQQ çağrılarının karnesi (mesaj her işlem günü ~08:00–09:30 NY)",
   "/veri — canlı veri denetimi: her kaynağın yaşı ve uyumu (Alpaca, Yahoo, opsiyon zinciri, VIX)",
-  "/fikirkarne — 15 dk SPY/QQQ fikirleri ve ani hareket alarmlarının gerçekleşen sonuçları",
+  "/aldim SPY 728C 4.50 — pozisyonunu takibe al (vade gg.aa, adet, hedef X, stop Y isteğe bağlı) · /sattim SPY 728C · /pozisyonlarim",
+  "/ayarlar — hangi mesajlar gelsin (aç/kapat) · /hesap 25000 1 — hesap ve işlem başı risk % → mesajlarda kontrat sayısı",
+  "/fikirkarne —15 dk SPY/QQQ fikirleri ve ani hareket alarmlarının gerçekleşen sonuçları",
   "/durum — bot durumu",
   "/yardim — bu liste",
 ].join("\n");
@@ -288,6 +383,7 @@ async function morningStep(st, ctx) {
       .map(r => ({ d: nyDate(new Date(r.ts)), open: r.open, high: r.high, low: r.low, close: r.close })));
   }
   if (!force && (wd === "Sat" || wd === "Sun" || mins < MORNING.START || mins >= MORNING.END || st.morning.day === today)) return;
+  if (!force && !isOn(st.prefs, "sabah")) { st.morning.day = today; return; }               // /ayarlar ile kapatıldı
   if (!force && (await isTradingDay(today)) === false) { st.morning.day = today; console.log("Sabah: bugün işlem günü değil."); return; }
   const r = await ctx.r();
   const fgNow = await getFG(st);
@@ -396,6 +492,7 @@ async function handleCommands(st, ivStore, ctx) {
   for (const { text } of updates) {
     const [cmdRaw, arg] = text.split(/\s+/);
     const cmd = cmdRaw.toLowerCase().split("@")[0];
+    if (await userCommand(st, cmd, text.split(/\s+/).slice(1)).catch(e => (console.error("[Komut]", e?.message || e), false))) continue;
     const sym = (arg || "").toUpperCase().replace(/[^A-Z.\-]/g, "");
     if (cmd === "/start" || cmd === "/yardim" || cmd === "/help") await sendTG(HELP);
     else if (cmd === "/hisse") {
@@ -543,6 +640,9 @@ export async function main() {
   const ctx = { r: async () => (_r ??= await riskFreeRate()), spy: async () => (_spy ??= await spyReturn60()), ideas: ideaBooks };
 
   await handleCommands(st, ivStore, ctx);
+  if (st.prefsDirty) { if (!gistEnabled() || await saveFiles({ [PREFS_FILE]: st.prefs })) delete st.prefsDirty; }   // 15 dk / ani hareket süreçleri okur
+  await premarketStep(st).catch(e => console.error("[Açılış öncesi]", e?.message || e));
+  await eodStep(st, ideaBooks).catch(e => console.error("[Gün sonu]", e?.message || e));
 
   // --- AÇILIŞ ÖNCESİ (07:30–09:29 NY, işlem günü, günde 1): SPY/QQQ gün içi eğilim + hedef/stop ---
   await morningStep(st, ctx).catch(e => console.error("[Sabah]", e?.message || e));
@@ -577,9 +677,12 @@ export async function main() {
     st.dataWarnDay = today;
     await sendTG(`⚠ VERİ UYARISI — ${st.data.problem}\nSinyaller gecikmeli/eksik fiyatla üretilmiş olabilir. Kaynak: ${st.data.src}.`);
   }
+  // --- SENİN POZİSYONLARIN: her çalıştırmada (~10 dk) uyarı kontrolü ---
+  await myPosStep(st, today).catch(e => console.error("[Pozisyon]", e?.message || e));
+
   // --- AŞIRI SATIM → HIZLI DÖNÜŞ (15:30–15:50 NY, günde 1): kaliteli + 200g üstü + RSI(2) < 5 + 20g ort. − 2 ATR ---
   // Ölçüm (research/rebound.mjs, 2015 sonrası 100 likit hisse): ort. +%1.04 / 3.8 gün, kazanan %71 (rastgele gün +%0.27 / 2.5 gün)
-  if (st.rebDay !== today && mins >= 930 && mins < 950) {
+  if (st.rebDay !== today && mins >= 930 && mins < 950 && isOn(st.prefs, "donus")) {
     await reboundStep(st, today, all).catch(e => console.error("[Dönüş]", e?.message || e));
   }
 
@@ -608,7 +711,7 @@ export async function main() {
   const fresh = pickFresh(signals, st.sent);
   const held = signals.filter(x => st.sent.map[x.sym] !== x.signal).length;   // kota yüzünden bekleyenler
   const firstOfDay = st.lastHeaderDay !== today;
-  if (fresh.length || firstOfDay) {
+  if ((fresh.length || firstOfDay) && isOn(st.prefs, "spot")) {
     // Haber duygusu (son 48 saat başlıkları) — yalnız BİLGİ etiketi, kurala girmez (research/news.mjs ölçümüne kadar)
     if (alpacaEnabled()) for (const s of fresh) {
       const t = newsTag(newsSentiment(await news(s.sym, 20).catch(() => []), Date.now() - 2 * 864e5));

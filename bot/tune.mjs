@@ -31,6 +31,6 @@ export const tunedValue = (file, k) => (TUNE[k].cands.includes(file?.[k]) ? file
 
 export function fmtTune(t) {
   if (!t?.idx) return "🎚 Eşik ayarı: henüz hesaplanmadı.";
-  return `🎚 Eşik ayarı (karneye göre, ${t.d}): ${TUNE.idx.lab} ≥ ${t.idx.value} (${t.idx.why}) · ${TUNE.fast.lab} ≥ ${t.fast.value} (${t.fast.why})` +
-    (t.idx.warn || t.fast.warn ? "\n⚠ Bazı fikir türleri karnede kaybettiriyor — eşik en seçiciye çekildi; sonuçlar düzelmezse o tür kapatılmalı." : "");
+  return `🎚 Eşik ayarı (karneye göre, ${t.d}): ${TUNE.fast.lab} ≥ ${t.fast.value} (${t.fast.why})` +
+    (t.fast.warn ? "\n⚠ Bazı fikir türleri karnede kaybettiriyor — eşik en seçiciye çekildi; sonuçlar düzelmezse o tür kapatılmalı." : "");
 }

@@ -35,7 +35,7 @@ test("karne: hedef/stop/süre, aynı mumda ikisi = STOP, ufuk dolmadan dokunulma
   assert.equal(t.res, "SÜRE"); assert.equal(t.r, 0.5);
   const s = ideaStats([it, p, t]);
   assert.equal(s.n, 3); assert.equal(s.hit, 1); assert.ok(Math.abs(s.avgR - 0.5) < 1e-9);
-  assert.match(fmtIdeaReport({ idx: { ideas: [it] }, fast: {} }, 1e6), /15 dk SPY\/QQQ/);
+  assert.match(fmtIdeaReport({ fast: { ideas: [{ ...it, src: "fast" }] } }, 1e6), /Ani hareket · 7 gün: 1 fikir/);
 });
 
 test("Faz 7: zayıf kalite/sektör sona iner, sıra kararlı, SAT güçlü sektörde sona iner", () => {

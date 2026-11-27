@@ -58,7 +58,7 @@ export function fmtIdeaStats(title, s) {
 // Rapor bloğu (haftalık rapor, /fikirkarne): iki kaynak × (son 7 gün, son 30 gün)
 export function fmtIdeaReport(books, now = Date.now()) {
   const d7 = now - 7 * 864e5, d30 = now - 30 * 864e5, L = ["📒 GÜN İÇİ FİKİR KARNESİ (dayanakta ölçülür; 1R = girişten stop'a mesafe)"];
-  for (const [k, lab, src] of [["idx", "⏱ 15 dk SPY/QQQ", null], ["fast", "⚡ Ani hareket", "fast"], ["fast", "🎯 Ölçülmüş kurulumlar", "setup"]]) {
+  for (const [k, lab, src] of [["fast", "⚡ Ani hareket", "fast"], ["fast", "🎯 Ölçülmüş kurulumlar", "setup"]]) {   // 15 dk artık plan (fikir kaydı yok)
     const ideas = (books?.[k]?.ideas || []).filter(it => !src || (it.src || "fast") === src);
     L.push(fmtIdeaStats(`${lab} · 7 gün`, ideaStats(ideas, d7)), fmtIdeaStats(`${lab} · 30 gün`, ideaStats(ideas, d30)));
   }

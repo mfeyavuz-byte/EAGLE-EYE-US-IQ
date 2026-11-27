@@ -14,7 +14,8 @@ import { join } from "node:path";
 import { nyParts, isRegularHours, fmtTR } from "../data/market.mjs";
 import { intradayBars, liveQuotes, alpacaEnabled, marketClock } from "../data/alpaca.mjs";
 import { fetchChart, fetchDaily, riskFreeRate } from "../data/yahoo.mjs";
-import { contractIdea, nyTs, IDX, capStop } from "./idx15.mjs";
+import { contractIdea, nyTs, IDX, capStop, setSizing } from "./idx15.mjs";
+import { PREFS_FILE, isOn } from "./prefs.mjs";
 import { closeTsOf } from "../data/market.mjs";
 import { sendTG } from "./telegram.mjs";
 import { loadFiles, saveFiles, READ_FAILED } from "./state.mjs";
@@ -191,7 +192,9 @@ export async function monitorExits(st, book, now = Date.now(), toCloseMin = 999)
   let sent = 0;
   for (const it of open) {
     let bars = cache.bars[it.sym];
-    if (!bars?.length && !alpacaEnabled()) bars = await fetchChart(it.sym, "1m", "1d").catch(() => []);
+    if (!bars?.length) bars = alpacaEnabled()                                              // ani hareket taraması kapalıysa önbellek boş → kendisi çeker
+      ? ((await intradayBars([it.sym], new Date(it.ts - 60e3).toISOString(), "1Min").catch(() => null)) || {})[it.sym] || []
+      : await fetchChart(it.sym, "1m", "1d").catch(() => []);
     const after = (bars || []).filter(b => b.ts >= it.ts);                   // yalnız fikirden SONRA başlayan mumlar
     const px = freshPrice(live[it.sym], now, 120e3) ?? after.at(-1)?.close;
     if (!px) continue;
@@ -288,19 +291,20 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 async function main() {
   const once = process.env.FAST_ONCE === "1", t0 = Date.now();
   const st = loadSt();
-  let clk = null, clkAt = 0, book = null, bookAt = 0, ev = [], evAt = 0, allow = [], model = null;
+  let clk = null, clkAt = 0, book = null, bookAt = 0, ev = [], evAt = 0, allow = [], model = null, prefs = null;
   do {
     try {
       // Karne defteri (kendi Gist dosyası): okunamazsa 10 dk sonra tekrar; ufku dolanlar 10 dk'da bir sonuçlandırılır
       if (Date.now() - bookAt > 10 * 60e3) {
         bookAt = Date.now();
         {                                                       // 10 dk'da bir: eşik dosyası (+ defter ilk kez)
-          const f = await loadFiles(book ? [TUNE_FILE, SETUPS_FILE] : [IDEA_FILES.fast, TUNE_FILE, SETUPS_FILE]).catch(() => READ_FAILED);
+          const f = await loadFiles(book ? [TUNE_FILE, SETUPS_FILE, PREFS_FILE] : [IDEA_FILES.fast, TUNE_FILE, SETUPS_FILE, PREFS_FILE]).catch(() => READ_FAILED);
           if (f !== READ_FAILED) {
             if (!book) book = f[IDEA_FILES.fast];
             FAST.Z_BURST = tunedValue(f[TUNE_FILE], "fast");                       // karneye göre σ eşiği
             allow = f[SETUPS_FILE]?.allow || [];                                    // ölçümü geçen kurulumlar
             model = f[SETUPS_FILE]?.model || null;                                  // olasılık modeli (yalnız testte işe yaradıysa "use")
+            prefs = f[PREFS_FILE] || null; setSizing(prefs);                         // /ayarlar + /hesap
           }
         }
         if (book && await settleIdeas(book, s => fetchChart(s, "1m", "5d")).catch(() => false)) await saveFiles({ [IDEA_FILES.fast]: book });
@@ -311,12 +315,12 @@ async function main() {
       const { mins } = nyParts();
       const toClose = clk?.nextClose ? (clk.nextClose - Date.now()) / 60e3 : 960 - mins;
       if ((open && mins >= 575 && toClose >= 10) || process.env.FORCE === "1") {
-        if (await scanFast(st, Date.now(), toClose, { ev, book }) && book) await saveFiles({ [IDEA_FILES.fast]: book });
-        if (await scanSetups(st, Date.now(), toClose, { ev, book, allow, model }).catch(e => { console.error("[kurulum]", e?.message || e); return 0; }) && book) await saveFiles({ [IDEA_FILES.fast]: book });
+        if (isOn(prefs, "ani") && await scanFast(st, Date.now(), toClose, { ev, book }) && book) await saveFiles({ [IDEA_FILES.fast]: book });
+        if (isOn(prefs, "kurulum") && await scanSetups(st, Date.now(), toClose, { ev, book, allow, model }).catch(e => { console.error("[kurulum]", e?.message || e); return 0; }) && book) await saveFiles({ [IDEA_FILES.fast]: book });
         saveSt(st);
       }
       else if (once) console.log("[⚡] seans dışı.");
-      if (open || process.env.FORCE === "1") {
+      if ((open || process.env.FORCE === "1") && isOn(prefs, "cikis")) {
         if (await monitorExits(st, book, Date.now(), toClose).catch(e => { console.error("[çıkış]", e?.message || e); return 0; }) && book) await saveFiles({ [IDEA_FILES.fast]: book });
         saveSt(st);
       }

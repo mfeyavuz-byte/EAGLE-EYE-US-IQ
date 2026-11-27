@@ -23,6 +23,7 @@ import { pushOpenLocal, ideaId } from "./exits.mjs";
 import { tradePlan, fmtPlan, fmtPlanLine } from "./plans.mjs";
 import { gexFor, fmtGex } from "./gex.mjs";
 import { readInternals, fmtInternals } from "./setuplive.mjs";
+import { PREFS_FILE, isOn, sizeLine } from "./prefs.mjs";
 import { loadUniverse } from "../spot/scan.mjs";
 
 export const IDX = { SYMS: ["SPY", "QQQ"], START: 585, END: 950, ODTE_UNTIL: 870, MIN_SCORE: 3, R_ATR: 1.5, R_MIN: 0.0015, RR: 2, SLIP: 0.3, MAX_SPREAD: 0.15 };
@@ -160,9 +161,11 @@ export async function contractIdea({ sym, dir, S, stop, target, r = 0.04, today,
   // SADE MESAJ: kontrat (başlıkta) · giriş / hedef / stop / süre · opsiyonun hedefte ve stopta tahmini değeri
   const ts = timeStop ?? (expD === today ? 45 : 90);
   const contract = pick ? `${expD === today ? "0DTE" : trD(expD)} ${pick.K}${dir} ~$${f2(pick.prem)}` : "kontrat yok (dayanakla izle)";
+  const size = pick ? sizeLine(SIZING, pick.prem, pick.atStop) : null;
   const L = [`   Giriş ${sym} ~${f2(S)} · Hedef ${f2(target)} · Stop ${f2(stop)} · süre ${ts} dk`];
   if (pick) L.push(`   Opsiyon hedefte ~$${f2(pick.atTgt)} · stopta ~$${f2(pick.atStop)}${Math.abs(pick.gap) > 0.003 ? " · ⚠ kotasyon bayat olabilir" : ""}`);
-  return { pick, expD, expClose, timeStop: ts, contract, lines: L };
+  if (size) L.push("   " + size);
+  return { pick, expD, expClose, timeStop: ts, contract, size, lines: L };
 }
 
 // extra: { ev: makro olaylar, pre: başa eklenecek satırlar (ör. dünkü karne) }
@@ -190,6 +193,9 @@ export async function buildIdx15(now = new Date(), extra = {}) {
 }
 
 // ---------- 15 DK (SPY/QQQ/GLD/SLV) + SAATLİK (en yüksek hacimli 25 hisse) İŞLEM PLANLARI ----------
+// Kontrat sayısı için hesap bilgisi (/hesap) — süreç başında ayarlanır
+let SIZING = null;
+export const setSizing = p => { SIZING = p?.acct ? p : null; };
 export const PLAN = { SYMS15: ["SPY", "QQQ", "GLD", "SLV"], TOP_N: 25 };
 let _top = null;
 export function topLiquid(n = PLAN.TOP_N) {                         // evrendeki en yüksek dolar hacimli hisseler
@@ -221,7 +227,7 @@ export async function buildPlans(now = new Date(), extra = {}) {
     if (p.trend !== "→") {
       const side = p.trend === "↑" ? p.call : p.put;
       const c = await contractIdea({ sym, dir: p.trend === "↑" ? "C" : "P", S: side.entry, stop: side.stop, target: side.target, r, today, allow0: toClose > 90 }).catch(() => null);
-      if (c?.pick) contract = c.contract;
+      if (c?.pick) contract = c.contract + (c.size ? ` · ${c.size.replace("Boyut: ", "")}` : "");
     }
     const gx = (sym === "SPY" || sym === "QQQ") ? fmtGex(await gexFor(sym, p.S, t).catch(() => null)) : null;
     blocks.push(fmtPlan(sym, p, contract) + (gx ? "\n" + gx : ""));
@@ -249,11 +255,13 @@ async function main() {
     if (!(await isMarketOpen())) { console.log("[15dk] piyasa kapalı (tatil)."); return 3; }
     if ((await closeTsOf(nyParts().date)) - Date.now() < 10 * 60e3) { console.log("[15dk] kapanışa < 10 dk."); return 3; }
   }
+  const pf = await loadFiles([PREFS_FILE]).catch(() => READ_FAILED), prefs = pf === READ_FAILED ? null : pf[PREFS_FILE];
+  setSizing(prefs);                                                            // /hesap → kontrat sayısı
   const ev = await macroEvents().catch(() => []);
-  const ok = await sendTG(await buildPlans(new Date(), { ev }));
-  console.log(`[15dk] plan ${ok ? "gönderildi" : "GÖNDERİLEMEDİ"}.`);
+  let ok = true;
+  if (isOn(prefs, "plan15")) { ok = await sendTG(await buildPlans(new Date(), { ev })); console.log(`[15dk] plan ${ok ? "gönderildi" : "GÖNDERİLEMEDİ"}.`); }
   // Saatlik (10:30, 11:30 … 15:30 NY): en hacimli 25 hisse
-  if (process.env.FORCE === "1" || (mins % 60 >= 30 && mins % 60 < 45 && mins >= 630)) {
+  if (isOn(prefs, "saatlik") && (process.env.FORCE === "1" || (mins % 60 >= 30 && mins % 60 < 45 && mins >= 630))) {
     const h = await buildHourly(new Date()).catch(e => (console.error("[saatlik]", e?.message || e), null));
     if (h) console.log(`[saatlik] ${(await sendTG(h)) ? "gönderildi" : "GÖNDERİLEMEDİ"}.`);
   }

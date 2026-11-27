@@ -74,6 +74,13 @@ export function tenorOf(occ, t) {
   const k = Math.round((exp - d) / 864e5);
   return k <= 0 ? "0DTE" : k <= 3 ? "1–3 gün" : "4+ gün";
 }
+// Son N günün kapanmış turları (gün sonu karnesi için) | null
+export async function paperTrips(days = 1) {
+  if (!optPaperEnabled()) return null;
+  const after = new Date(Date.now() - days * 864e5).toISOString();
+  const orders = await call("GET", `/v2/orders?status=closed&limit=500&direction=asc&after=${encodeURIComponent(after)}`);
+  return Array.isArray(orders) ? roundTrips(orders) : null;
+}
 export async function paperOptReport(days = 30) {
   if (!optPaperEnabled()) return null;
   const after = new Date(Date.now() - days * 864e5).toISOString();

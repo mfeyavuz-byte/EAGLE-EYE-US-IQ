@@ -119,6 +119,14 @@ Beklenti: Alımda oynaklık primini sen ödersin, orta ölçekli hisselerin opsi
 - **🎯 Ölçülmüş gün içi kurulumlar (`bot/setups.mjs`, `research/intraday.mjs`):** trend geri çekilmesi, VWAP geri alma, açılış
   düşüşünü sindirme, sektör genişliği itkisi her 5 dk mum kapanışında taranır; yalnız 1 yıllık Alpaca ölçümünü geçenler
   (n ≥ 40, ort ≥ +0.15R, t ≥ 2; gün parçası bazında) anında gönderilir. Ölçüm haftalık + liste eskiyince kendiliğinden.
+- **📌 Pozisyon takibi (`bot/mypos.mjs`):** `/aldim SPY 728C 4.50` (isteğe bağlı vade gg.aa, adet, `hedef X`, `stop Y`) →
+  seans içinde ~10 dk'da bir izlenir; prim −%50, +%100, dayanak hedef/stop, vade günü kapanışa 30 dk → tek seferlik uyarı.
+  `/pozisyonlarim` (anlık değer, K/Z), `/sattim SPY 728C [fiyat]`.
+- **⚙️ Ayarlar (`bot/prefs.mjs`):** `/ayarlar` ile her mesaj türü aç/kapat (düğmeli); `/hesap 25000 1` → fikirlerde kontrat sayısı
+  (stopta kayıp ≤ hesabın %1'i).
+- **🌅 Açılış öncesi hareketliler (`bot/daily.mjs`):** 09:00–09:25 NY, en likit 400 hisse içinde ön piyasada ≥ %3 açılan 8 hisse,
+  boşluk yönünde devam planı (giriş/hedef/stop) + haber başlığı.
+- **📒 Gün sonu karne:** 16:05 NY sonrası tek mesaj: bugünkü fikirlerin hedef/stop/süre sayısı, net R, sanal hesap K/Z.
 - **📊 Piyasa içi + gün tipi + gamma (15 dk mesajında):** S&P'nin en büyük 50 hissesinin VWAP üstü oranı ve son 5 dk yükselen
   sayısı (TICK benzeri), sektör genişliği; gün tipi 10:30 NY'den sonra (trend↑/trend↓/yatay/karışık — ilk saat aralığı ÷ günlük
   ATR ve itki); SPY/QQQ GEX seviyeleri (`bot/gex.mjs`: gamma dönüşü, call duvarı üstte, put duvarı altta; 30 dk önbellek).
