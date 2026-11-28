@@ -6,8 +6,9 @@
 // 200 haftalık ortalama olayları: 4 ve 13 haftalık fazla getiri (bilgi; uyarılar her durumda gider, mesajda bu ölçüm yazar).
 import { fetchHistory, weeklyFromDaily } from "../data/yahoo.mjs";
 import { loadUniverse } from "../spot/scan.mjs";
-import { holdUniverse } from "../bot/hold.mjs";
-import { TA, TA_FILE, TA_LABEL, WMA_LABEL, prep, taSignals, taOutcome, wmaArr, wmaEvent } from "../bot/ta.mjs";
+import { holdUniverse, indicators, holdPick } from "../bot/hold.mjs";
+import { SECTOR_ETF } from "../bot/edge.mjs";
+import { TA, TA_FILE, TA_LABEL, TF_LABEL, WMA_LABEL, prep, taSignals, taOutcome, wmaArr, wmaEvent, tfMatch, sectorLead20 } from "../bot/ta.mjs";
 import { saveFiles, gistEnabled } from "../bot/state.mjs";
 
 const U = loadUniverse(), NU = +(process.env.TA_N || 150), syms = holdUniverse(U, 1000);
@@ -34,15 +35,28 @@ for (let t = START; t < dates.length - 11; t++) {
   base10.set(t, f.length ? f.reduce((a, v) => a + v, 0) / f.length : 0);
 }
 const split = START + Math.floor((dates.length - 11 - START) * 0.6);
+// Kesişim için: sektör ETF'lerinin 20 günlük getirisi (tarih hizalı) → her gün lider sektörler (SPY'dan iyi, ilk 3)
+const SECS = [...new Set(Object.values(SECTOR_ETF))], SC = {};
+for (const e of SECS) { const r = await fetchHistory(e, "2010-01-01").catch(() => []); SC[e] = new Map(r.map(x => [day(x.ts), x.close])); }
+const leadAt = new Map();
+const leadOf = t => {
+  if (leadAt.has(t)) return leadAt.get(t);
+  const last = { SPY: t >= 20 ? spy[t].close / spy[t - 20].close - 1 : null };
+  for (const e of SECS) { const a = SC[e].get(dates[t]), b = t >= 20 ? SC[e].get(dates[t - 20]) : null; last[e] = a && b ? a / b - 1 : null; }
+  const o = sectorLead20(last); leadAt.set(t, o); return o;
+};
 const recs = [];
 for (const [s, x] of Object.entries(D)) {
-  const P = prep(x.rows);
+  const P = prep(x.rows), ind = indicators(x.rows), etf = SECTOR_ETF[U.meta?.[s]?.sec || ""];
   for (let j = 260; j < x.rows.length - TA.HOR - 1; j++) {
     const t = x.at[j];
     if (t < START || !top.get(t)?.has(s)) continue;
-    for (const sg of taSignals(x.rows, P, j)) {
+    const sgs = taSignals(x.rows, P, j);
+    if (!sgs.length) continue;
+    const fl = { mom: !!holdPick("MOM", x.rows, ind, j, spy[t].close / spy[t - 120].close - 1), lead: !!(etf && leadOf(t)[etf]) };
+    for (const sg of sgs) {
       const f10 = x.rows[j + 10].close / x.rows[j].close - 1;
-      recs.push({ train: t < split, name: sg.name, dir: sg.dir, r: taOutcome(x.rows, j, sg), ex: (sg.dir === "C" ? 1 : -1) * (f10 - base10.get(t)), tr: sg.trend });
+      recs.push({ train: t < split, name: sg.name, dir: sg.dir, r: taOutcome(x.rows, j, sg), ex: (sg.dir === "C" ? 1 : -1) * (f10 - base10.get(t)), trend: sg.trend, fl });
     }
   }
 }
@@ -50,14 +64,15 @@ const st = a => { const n = a.length, m = n ? a.reduce((p, q) => p + q, 0) / n :
   return { n, m, t: sd > 0 ? m / (sd / Math.sqrt(n)) : 0, w: n ? a.filter(v => v > 0).length / n : 0 }; };
 const allow = [], p = x => `${x >= 0 ? "+" : "−"}%${Math.abs(x * 100).toFixed(2)}`;
 console.log(`SONUÇ — TEKNİK FORMASYONLAR (her gün en likit ${NU} hisse, ${Object.keys(D).length} S&P 500 hissesi içinden; ${dates[START]} → ${dates.at(-12)}; eğitim/test %60/%40)`);
-for (const name of TA.NAMES) for (const dir of ["C", "P"]) for (const tf of ["tümü", "trendle"]) {
-  const sub = recs.filter(r => r.name === name && r.dir === dir && (tf === "tümü" || r.tr === (dir === "C" ? 1 : -1)));
+for (const name of TA.NAMES) for (const dir of ["C", "P"]) for (const tf of ["tümü", "trendle", "mom", "lider", "ikisi"]) {
+  const sub = recs.filter(r => r.name === name && r.dir === dir && tfMatch(tf, r, r.fl));
+  if (tf !== "tümü" && sub.length < 60) continue;
   const a = st(sub.filter(r => r.train).map(r => r.r)), b = st(sub.filter(r => !r.train).map(r => r.r)), ex = st(sub.filter(r => !r.train).map(r => r.ex));
   console.log(`${(name + " " + (dir === "C" ? "CALL" : "PUT") + " " + tf).padEnd(18)} EĞİTİM n ${String(a.n).padStart(5)} ${a.m >= 0 ? "+" : ""}${a.m.toFixed(2)}R t ${a.t.toFixed(1)} · TEST n ${String(b.n).padStart(4)} ${b.m >= 0 ? "+" : ""}${b.m.toFixed(2)}R isabet %${Math.round(b.w * 100)} · 10g fazla ${p(ex.m)}`);
   if (a.n >= 40 && a.m >= 0.1 && a.t >= 2 && b.n >= 25 && b.m >= 0.05 && ex.m > 0) allow.push({ name, dir, tf, n: a.n + b.n, m: +b.m.toFixed(3), w: +b.w.toFixed(3), ex: +ex.m.toFixed(4) });
 }
 // "tümü" geçtiyse "trendle" gereksiz
-const slim = allow.filter(a => a.tf === "tümü" || !allow.some(b => b.name === a.name && b.dir === a.dir && b.tf === "tümü"));
+const slim = allow.filter(a => a.tf === "tümü" || !allow.some(b => b.name === a.name && b.dir === a.dir && b.tf === "tümü")).sort((a, b) => b.m - a.m);
 // 200 haftalık ortalama
 const W = { UP: [], DN: [], TOUCH: [], RETEST: [] };
 const wk = {}; for (const [s, x] of Object.entries(D)) { const w = weeklyFromDaily(x.rows); wk[s] = { w, m: wmaArr(w) }; }
@@ -80,7 +95,7 @@ for (const [ev, a] of Object.entries(W)) {
   console.log(`200 HAFTALIK ${ev.padEnd(6)} n ${String(all.n).padStart(4)} · 4 hafta fazla ${p(x4.m)} · 13 hafta fazla ${p(all.m)} (geçen %${Math.round(all.w * 100)}) · test 13h ${p(te.m)} (n ${te.n})`);
 }
 console.log(slim.length ? "CANLIYA ALINAN: " + slim.map(a => `${a.name} ${a.dir} ${a.tf} (test ${a.m >= 0 ? "+" : ""}${a.m}R)`).join(" · ") : "CANLIYA ALINAN: yok");
-const lab = a => `${a.dir === "C" ? "CALL" : "PUT"} — ${TA_LABEL[a.name][a.dir]}${a.tf === "trendle" ? " (kısa vadeli trend yönünde)" : ""}`;
+const lab = a => `${a.dir === "C" ? "CALL" : "PUT"} — ${TA_LABEL[a.name][a.dir]}${TF_LABEL[a.tf] || ""}`;
 console.log(["ÖZET", `🧪 Teknik formasyon testi (${Object.keys(D).length} büyük hisse, ${dates[START].slice(0, 4)} sonrası; son %40 hiç görülmeden sınandı)`,
   ...(slim.length ? slim.map(a => `✅ ${lab(a)}: isabet %${Math.round(a.w * 100)} · işlem başı +${a.m}R → canlıda`) : ["❌ Hiçbir formasyon testi geçmedi → formasyon mesajı gönderilmeyecek."]),
   ...Object.entries(wma).map(([ev, x]) => `📏 ${WMA_LABEL[ev]}: 13 haftada piyasadan ${p(x.x13)} (${x.n} olay) → ${x.x13 > 0 ? "işe yarıyor" : "zayıf, ihtiyatlı"}`)].join("\n"));

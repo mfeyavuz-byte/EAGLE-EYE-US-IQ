@@ -20,7 +20,7 @@ import { closeTsOf } from "../data/market.mjs";
 import { sendTG } from "./telegram.mjs";
 import { loadFiles, saveFiles, READ_FAILED } from "./state.mjs";
 import { IDEA_FILES, HORIZON, addIdea, settleIdeas, fmtIdeaReport } from "./ideabook.mjs";
-import { panelEnabled, PANEL, readFeed, seedFeed, loadPanel, buildSnapshot, publishPanel } from "./panel.mjs";
+import { panelEnabled, PANEL, readFeed, seedFeed, loadPanel, buildSnapshot, publishPanel, readTaKarne } from "./panel.mjs";
 import { macroEvents, nearEvent, fmtNear } from "./macro.mjs";
 import { freshPrice, ageTxt } from "./liveaudit.mjs";
 import { paperBuy, paperClose, warnPaperFail, paperQty } from "./optpaper.mjs";
@@ -344,7 +344,7 @@ async function panelStep(st, book, open) {
   const now = Date.now(), done = { ...(book?.exits || {}), ...(st.exits || {}) };
   const openIdeas = readOpenLocal().filter(o => o.id && !done[o.id] && o.ts <= now && now - o.ts < 6 * 3600e3);
   await publishPanel(buildSnapshot({ feed: readFeed(), internals: readInternals(now, 30 * 60e3), lead: st.lead,
-    karne: book ? fmtIdeaReport({ fast: book }, now) : null, paused: book ? pausedList(book.ideas, now) : [], open: openIdeas, now }));
+    karne: [book ? fmtIdeaReport({ fast: book }, now) : null, readTaKarne()].filter(Boolean).join("\n\n") || null, paused: book ? pausedList(book.ideas, now) : [], open: openIdeas, now }));
 }
 // Uzun yaşayan döngü: ~55 dk çalışır, sonra çıkar (iş akışı yeniden başlatır). FAST_ONCE=1 → tek tarama (test).
 async function main() {

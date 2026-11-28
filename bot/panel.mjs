@@ -13,6 +13,10 @@ export const PANEL_FILE = "panel.json";
 export const PANEL = { KEEP_H: 36, MAX: 400, PUB_MS: 2 * 60e3, PUB_IDLE_MS: 15 * 60e3 };
 const TOKEN = process.env.GH_GIST_TOKEN || "", PID = process.env.PANEL_GIST_ID || "";
 export const panelEnabled = () => !!(TOKEN && PID);
+// Formasyon/200 WMA karnesi tarama sürecinin durumunda → yerel dosya; yayıncı (fast.mjs) okuyup panele ekler
+export const TA_KARNE_FILE = join(process.env.RUNNER_TEMP || tmpdir(), "eagle_ta_karne.txt");
+export function writeTaKarne(text) { try { writeFileSync(TA_KARNE_FILE, sanitize(text)); } catch {} }
+export function readTaKarne() { try { return readFileSync(TA_KARNE_FILE, "utf8"); } catch { return null; } }
 
 // Kişisel: kontrat sayısı, hesap %'si, stopta $ kayıp (hesap büyüklüğünü ele verir) → silinir
 export function sanitize(text) {

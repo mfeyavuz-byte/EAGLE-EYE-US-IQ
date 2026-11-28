@@ -20,7 +20,7 @@
 // 200 HAFTALIK ORTALAMA (haftalık kapanış): UP yukarı kırdı · DN aşağı kırdı · TOUCH yükselişte ortalamaya geldi (destek)
 //   · RETEST kırılım sonrası geri test tuttu.
 export const TA = { ZZ_K: 2, ATR_N: 14, MIN_W: 3, HOR: 20, TLB_LOOK: 120, TLB_VOL: 1.2, DIP_DROP: 3,
-  WMA_N: 200, WMA_SIDE: 8, WMA_NEAR: 0.02, WMA_RETEST_WK: 12, NAMES: ["EW2", "EW4", "ABC", "FLAT", "TRI", "DIAG", "TLB", "DIP"] };
+  WMA_N: 200, WMA_SIDE: 8, WMA_NEAR: 0.02, WMA_RETEST_WK: 12, NAMES: ["EW2", "EW4", "ABC", "FLAT", "TRI", "DIAG", "TLB", "DIP", "MA20"] };
 export const TA_FILE = "abd_ta.json";
 export const TA_LABEL = {
   EW2: { C: "Elliott: 2. dalga bitti → 3. dalga başlıyor", P: "Elliott: düşüşte 2. dalga bitti → 3. dalga aşağı" },
@@ -28,6 +28,7 @@ export const TA_LABEL = {
   ABC: { C: "Elliott: zikzak (ABC) düzeltme bitti, trend devam", P: "Elliott: zikzak (ABC) tepki bitti, düşüş devam" },
   TLB: { C: "Düşen trend çizgisi hacimle kırıldı", P: "Yükselen trend çizgisi aşağı kırıldı" },
   DIP: { C: "Dipten dönüş (RSI pozitif uyumsuzluk)", P: "Tepeden dönüş (RSI negatif uyumsuzluk)" },
+  MA20: { C: "Yükselen trendde 20 günlük ortalamaya geri çekilme", P: "Düşen trendde 20 günlük ortalamaya tepki" },
   FLAT: { C: "Elliott: yassı (flat) düzeltme bitti, trend devam", P: "Elliott: yassı (flat) tepki bitti, düşüş devam" },
   TRI: { C: "Elliott: daralan üçgen bitti → yukarı itki", P: "Elliott: daralan üçgen bitti → aşağı itki" },
   DIAG: { C: "Elliott: bitiş diyagonali (düşen kama) → dipten dönüş", P: "Elliott: bitiş diyagonali (yükselen kama) → tepeden dönüş" },
@@ -80,7 +81,8 @@ export function zigzag(r, atr, k = TA.ZZ_K) {
 export function prep(rows) {
   const c = rows.map(r => r.close), atr = atrArr(rows);
   const vol20 = rows.map((_, i) => (i >= 20 ? rows.slice(i - 20, i).reduce((a, r) => a + (r.volume || 0), 0) / 20 : null));
-  return { c, atr, ema20: emaArr(c, 20), ema50: emaArr(c, 50), rsi: rsiArr(c), vol20, piv: zigzag(rows, atr) };
+  const sma20 = c.map((_, i) => (i >= 19 ? c.slice(i - 19, i + 1).reduce((a, x) => a + x, 0) / 20 : null));
+  return { c, atr, sma20, ema20: emaArr(c, 20), ema50: emaArr(c, 50), rsi: rsiArr(c), vol20, piv: zigzag(rows, atr) };
 }
 // Kısa vadeli trend (uzun ölçü YOK): +1 yükseliş, −1 düşüş, 0 belirsiz
 export function shortTrend(P, i, known) {
@@ -151,6 +153,16 @@ export function taSignals(rows, P, i) {
           out.push(mk("DIP", dir, S, L.p - s * 0.25 * a, H.p, `RSI ${Math.round(rP)} → ${Math.round(rL)} (fiyat daha ${s === 1 ? "düşük dip" : "yüksek tepe"})`));
       }
     }
+    // MA20: kısa vadeli trend o yönde, fiyat 5 gündür ortalamanın o tarafında, bugün ortalamaya değdi ve o tarafta kapattı (ilk temas)
+    const m20 = P.sma20[i];
+    if (m20 && tr === s && i >= 6) {
+      const touch = s === 1 ? rows[i].low <= m20 * 1.005 && S > m20 : rows[i].high >= m20 * 0.995 && S < m20;
+      const away = [1, 2, 3, 4, 5].every(q => P.sma20[i - q] && s * (rows[i - q].close - P.sma20[i - q]) > 0 && s * ((s === 1 ? rows[i - q].low : rows[i - q].high) - P.sma20[i - q] * (1 + s * 0.005)) > 0);
+      if (touch && away) {
+        const stop = (s === 1 ? Math.min(rows[i].low, m20) : Math.max(rows[i].high, m20)) - s * 0.5 * a, R = Math.abs(S - stop);
+        if (R > 0) out.push(mk("MA20", dir, S, stop, S + s * 2 * R, `ortalama ${m20.toFixed(2)}`));
+      }
+    }
     // TLB: son iki teyitli tepe (düşen) çizgisi, kapanış yukarı kesti + hacim
     const highT = s === 1 ? "H" : "L", hs = known.filter(p => p.t === highT && p.i >= i - TA.TLB_LOOK).slice(-2);
     if (hs.length === 2 && v(hs[1]) < v(hs[0]) && i > hs[1].c) {
@@ -209,7 +221,7 @@ const f2 = x => (x >= 100 ? x.toFixed(1) : x.toFixed(2));
 const pc = x => `${x >= 0 ? "+" : "−"}%${Math.abs(x * 100).toFixed(1)}`;
 export function fmtTa(list) {
   if (!list?.length) return null;
-  return ["📐 TEKNİK FORMASYONLAR", ...list.map(x => `${x.dir === "C" ? "🟢" : "🔴"} ${x.sym} ${x.dir === "C" ? "CALL" : "PUT"} AL — ${TA_LABEL[x.name][x.dir]}\n` +
+  return ["📐 TEKNİK FORMASYONLAR", ...list.map(x => `${x.dir === "C" ? "🟢" : "🔴"} ${x.sym} ${x.dir === "C" ? "CALL" : "PUT"} AL — ${TA_LABEL[x.name][x.dir]}${TF_LABEL[x.a?.tf] || ""}\n` +
     `   Giriş ~${f2(x.S)} · Hedef ${f2(x.target)} · Stop ${f2(x.stop)}${x.contract ? ` · ${x.contract}` : ""}${x.a ? ` (test: isabet %${Math.round(x.a.w * 100)} · ${x.a.m >= 0 ? "+" : ""}${x.a.m}R)` : ""}`)].join("\n");
 }
 export function fmtWma(list, stats) {
@@ -221,4 +233,59 @@ export function fmtWma(list, stats) {
     return `${ico[x.ev]} ${x.sym} ${act} — ${WMA_LABEL[x.ev]}\n   Fiyat ~${f2(x.px)} · ortalama ${f2(x.wma)} (${pc(x.d)}) · ${stop}${x.contract ? ` · ${x.contract}` : ""}` +
       (s?.n ? ` (geçmiş: 13 haftada piyasadan ${pc(s.x13)}, ${s.n} olay${s.x13 > 0 ? "" : " → zayıf, küçük tut"})` : "");
   })].join("\n");
+}
+
+// ---- KESİŞİM: formasyon + momentum lideri (6 ay SPY'dan güçlü, MA50 > MA200) + lider sektör (20 gün SPY'dan iyi, ilk 3) ----
+// tf: "tümü" | "trendle" | "mom" | "lider" | "ikisi" — araştırma hangisi geçtiyse canlı aynı şartı arar
+export const TF_LABEL = { tümü: "", trendle: " (kısa vadeli trend yönünde)", mom: " + momentum lideri", lider: " + lider sektörde", ikisi: " + momentum lideri + lider sektörde" };
+export function tfMatch(tf, sg, fl = {}) {
+  if (tf === "tümü") return true;
+  if (tf === "trendle") return sg.trend === (sg.dir === "C" ? 1 : -1);
+  if (tf === "mom") return !!fl.mom;
+  if (tf === "lider") return !!fl.lead;
+  if (tf === "ikisi") return !!(fl.mom && fl.lead);
+  return false;
+}
+// Sektör 20 günlük liderlik: closes = { SPY: [...], XLK: [...] } (aynı tarih hizasında son değerler) → { XLK: true, ... }
+export function sectorLead20(last) {
+  const spy = last.SPY; if (!(spy > -1)) return {};
+  const rel = Object.entries(last).filter(([k, v]) => k !== "SPY" && v != null).map(([k, v]) => [k, v - spy]).sort((a, b) => b[1] - a[1]);
+  return Object.fromEntries(rel.map(([k, v], q) => [k, q < 3 && v > 0]));
+}
+
+// ---- CANLI KARNE (formasyon + 200 WMA) — gönderilen her fikir kaydedilir, günlük mumlarla sonuçlandırılır ----
+// Formasyon: stop/hedef/20 işlem günü (aynı mumda ikisi = stop) → R. 200 WMA: 65 işlem günü (≈ 13 hafta) ya da günlük kapanış
+// stopu geçerse; sonuç yön yönünde % getiri (r = getiri / stop mesafesi → R).
+const dayOf = ts => new Date(ts).toISOString().slice(0, 10);
+export function settleTa(rec, rows, today) {
+  if (rec.res) return false;
+  const j = rows.findIndex(r => dayOf(r.ts) === rec.d);
+  if (j < 0) return false;
+  const up = rec.dir === "C", R = Math.abs(rec.S - rec.stop), hor = rec.src === "wma" ? 65 : TA.HOR;
+  if (!(R > 0)) { rec.res = "geçersiz"; rec.r = 0; return true; }
+  for (let k = j + 1; k < rows.length && k <= j + hor; k++) {
+    if (dayOf(rows[k].ts) >= today) break;                                  // bugünün mumu tamamlanmadı
+    const x = rows[k];
+    if (rec.src === "wma") {
+      if (up ? x.close <= rec.stop : x.close >= rec.stop) { rec.res = "STOP"; rec.r = +(((up ? 1 : -1) * (x.close - rec.S)) / R).toFixed(2); rec.end = dayOf(x.ts); return true; }
+      if (k === j + hor) { rec.res = "SÜRE"; rec.r = +(((up ? 1 : -1) * (x.close - rec.S)) / R).toFixed(2); rec.end = dayOf(x.ts); return true; }
+      continue;
+    }
+    const hs = up ? x.low <= rec.stop : x.high >= rec.stop, ht = up ? x.high >= rec.target : x.low <= rec.target;
+    if (hs) { rec.res = "STOP"; rec.r = -1; rec.end = dayOf(x.ts); return true; }
+    if (ht) { rec.res = "HEDEF"; rec.r = +(Math.abs(rec.target - rec.S) / R).toFixed(2); rec.end = dayOf(x.ts); return true; }
+    if (k === j + hor) { rec.res = "SÜRE"; rec.r = +(((up ? 1 : -1) * (x.close - rec.S)) / R).toFixed(2); rec.end = dayOf(x.ts); return true; }
+  }
+  return false;
+}
+export function fmtTaBook(book) {
+  const L = ["📐 FORMASYON + 200 WMA CANLI KARNE (1R = girişten stop'a)"], by = {};
+  for (const b of book || []) { const k = b.src === "wma" ? `200 WMA ${b.name}` : `${b.name} ${b.dir === "C" ? "CALL" : "PUT"}`; (by[k] ||= []).push(b); }
+  if (!Object.keys(by).length) return L[0] + "\nHenüz gönderilmiş fikir yok.";
+  for (const [k, a] of Object.entries(by)) {
+    const d = a.filter(x => x.res && x.res !== "geçersiz"), open = a.length - d.length - a.filter(x => x.res === "geçersiz").length;
+    const avg = d.length ? d.reduce((p, x) => p + x.r, 0) / d.length : null;
+    L.push(`${k}: ${d.length ? `${d.length} sonuçlandı · isabet %${Math.round(d.filter(x => x.r > 0).length / d.length * 100)} · ort ${avg >= 0 ? "+" : ""}${avg.toFixed(2)}R` : "henüz sonuç yok"}${open ? ` · açık ${open}` : ""}`);
+  }
+  return L.join("\n");
 }

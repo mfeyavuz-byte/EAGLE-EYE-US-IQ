@@ -49,7 +49,10 @@ import { paperTrips } from "./optpaper.mjs";
 import { closeTsOf, nyTs } from "../data/market.mjs";
 import { weakQuality } from "./edge.mjs";
 import { HOLD_FILE, HOLD, holdUniverse, indicators, holdPick, pickList, fmtHold, weekKey } from "./hold.mjs";
-import { TA_FILE, prep, taSignals, wmaArr, wmaEvent, fmtTa, fmtWma } from "./ta.mjs";
+import { TA_FILE, prep, taSignals, wmaArr, wmaEvent, fmtTa, fmtWma, tfMatch, sectorLead20, settleTa, fmtTaBook } from "./ta.mjs";
+import { keyState, pausedList, keyLabel } from "./guard.mjs";
+import { SECTOR_ETF } from "./edge.mjs";
+import { writeTaKarne } from "./panel.mjs";
 import { fetchChart } from "../data/yahoo.mjs";
 import { pickTenor } from "./morning.mjs";
 import { earningsOn, reportDates } from "../data/nasdaq.mjs";
@@ -116,25 +119,41 @@ async function optTxt(sym, dir, r, lo, hi, tgt) {
   const ch = await loadChain(sym, r, { minDte: lo, maxDte: hi, targets: [tgt] }).catch(() => null), t = pickTenor(ch, lo, hi, dir, 0.5);
   return t ? `${t.expD.slice(8, 10)}.${t.expD.slice(5, 7)} ${t.c.K}${dir} ~$${t.prem.toFixed(2)}` : null;
 }
-async function taStep(st, today, wd) {
+export async function taStep(st, today, wd) {
   const f = await loadFiles([TA_FILE]).catch(() => READ_FAILED);
   if (f === READ_FAILED) return;
   st.taDay = today;
-  const cfg = f[TA_FILE] || {}, allow = cfg.allow || [], r = await riskFreeRate().catch(() => 0.04), uni = holdUniverse(UNI);
+  const book = (st.taBook ||= []);
+  for (const b of book.filter(x => !x.res)) {                                // canlı karne: açık fikirleri günlük mumla sonuçlandır
+    const rows = dailyCache.get(b.sym) || await fetchDaily(b.sym).catch(() => null);
+    if (rows) settleTa(b, rows, today);
+  }
+  if (book.length > 400) book.splice(0, book.length - 400);
+  const cfg = (process.env.TA_CFG ? JSON.parse(process.env.TA_CFG) : f[TA_FILE]) || {}, allow = [...(cfg.allow || [])].sort((x, y) => y.m - x.m), r = await riskFreeRate().catch(() => 0.04), uni = holdUniverse(UNI);
   if (isOn(st.prefs, "formasyon") && allow.length) {
-    const pats = [];
+    const pats = [], spy = dailyCache.get("SPY") || await fetchDaily("SPY").catch(() => []);
+    const ir120 = spy.length > 121 ? spy.at(-1).close / spy.at(-121).close - 1 : 0;
+    const secs = [...new Set(Object.values(SECTOR_ETF))], last = { SPY: spy.length > 21 ? spy.at(-1).close / spy.at(-21).close - 1 : null };
+    for (const e of secs) { const d = dailyCache.get(e) || await fetchDaily(e).catch(() => []); last[e] = d.length > 21 ? d.at(-1).close / d.at(-21).close - 1 : null; }
+    const lead = sectorLead20(last);
     for (const s of uni) {
       const rows = dailyCache.get(s);
       if (!rows || rows.length < 260 || rows.at(-1).close < 10) continue;
-      for (const sg of taSignals(rows, prep(rows), rows.length - 1)) {
-        const a = allow.find(x => x.name === sg.name && x.dir === sg.dir && (x.tf === "tümü" || sg.trend === (sg.dir === "C" ? 1 : -1)));
-        if (a) pats.push({ sym: s, ...sg, a });
+      const sgs = taSignals(rows, prep(rows), rows.length - 1);
+      if (!sgs.length) continue;
+      const fl = { mom: !!holdPick("MOM", rows, indicators(rows), rows.length - 1, ir120), lead: !!lead[SECTOR_ETF[UNI.meta?.[s]?.sec || ""]] };
+      for (const sg of sgs) {
+        const a = allow.find(x => x.name === sg.name && x.dir === sg.dir && tfMatch(x.tf, sg, fl));
+        if (!a) continue;
+        const ks = keyState(book, `ta|${sg.name}|${sg.dir}`);
+        if (ks.paused) { console.log(`[Formasyon] ${s} ${sg.name} ${sg.dir} — ${keyLabel(`ta|${sg.name}|${sg.dir}`)} durdurulmuş`); continue; }
+        pats.push({ sym: s, ...sg, a });
       }
     }
     const top = pats.sort((x, y) => y.a.m - x.a.m).slice(0, 8);
     for (const x of top) x.contract = await optTxt(x.sym, x.dir, r, 25, 50, 35);
     const txt = fmtTa(top);
-    if (txt) await sendTG(txt, { panel: "ta" });
+    if (txt && await sendTG(txt, { panel: "ta" })) for (const x of top) book.push({ src: "ta", ts: Date.now(), name: x.name, dir: x.dir, sym: x.sym, d: today, S: x.S, stop: x.stop, target: x.target, tf: x.a.tf });
     console.log(`[Formasyon] aday ${pats.length} · gönderilen ${top.length}`);
   }
   if (isOn(st.prefs, "wma200")) {
@@ -151,7 +170,10 @@ async function taStep(st, today, wd) {
     }
     for (const x of ev.slice(0, 10)) x.contract = await optTxt(x.sym, x.dir, r, 50, 110, 75);
     const txt = fmtWma(ev.slice(0, 10), cfg.wma);
-    if (txt && await sendTG(txt, { panel: "wma" })) for (const x of ev.slice(0, 10)) sent[`${x.sym}|${x.ev}`] = today;
+    if (txt && await sendTG(txt, { panel: "wma" })) for (const x of ev.slice(0, 10)) {
+      sent[`${x.sym}|${x.ev}`] = today;
+      book.push({ src: "wma", ts: Date.now(), name: x.ev, dir: x.dir, sym: x.sym, d: today, S: x.px, stop: +(x.wma * (x.dir === "C" ? 0.97 : 1.03)).toFixed(2), target: null });
+    }
     for (const [k, d] of Object.entries(sent)) if (Date.parse(today) - Date.parse(d) > 60 * 864e5) delete sent[k];
     console.log(`[200 WMA] olay ${ev.length}`);
   }
@@ -606,7 +628,7 @@ async function handleCommands(st, ivStore, ctx) {
       await sendTG((await liveAudit(st)).text);
     } else if (cmd === "/fikirkarne") {
       const pr = await paperOptReport(30).catch(() => null);
-      await sendTG(fmtIdeaReport(ctx.ideas) + (pr ? "\n" + pr : "") + (st.tune ? "\n" + fmtTune(st.tune) : "") + "\n" + fmtEarnBook(st.earn?.closed));
+      await sendTG(fmtIdeaReport(ctx.ideas) + "\n\n" + fmtTaBook(st.taBook) + (pr ? "\n" + pr : "") + (st.tune ? "\n" + fmtTune(st.tune) : "") + "\n" + fmtEarnBook(st.earn?.closed));
     } else if (cmd === "/sabah") {
       await sendTG(fmtMorningBook(st.morning?.book) + (st.morning?.day ? `\nSon sabah mesajı: ${st.morning.day}` : ""));
     } else if (cmd === "/etf") {
@@ -994,6 +1016,7 @@ export async function main() {
     console.log(`IV geçmişi: ${n}/${top.length} kaydedildi · ${((Date.now() - t2) / 1e3).toFixed(0)}s`);
   }
 
+  writeTaKarne(fmtTaBook(st.taBook) + pausedList(st.taBook).map(p => `\n⏸ ${keyLabel(p.key)} durdurulmuş: son 10 fikir ${p.s10}R · ${p.daysLeft} gün`).join(""));   // panel okur
   const trimmed = trimState(st);
   if (trimmed) console.log(`Durum dosyası budandı: ${trimmed} eski kapanmış kayıt silindi.`);
   await saveFiles(ivDirty ? { [STATE_FILE]: st, [IVHIST_FILE]: ivStore } : { [STATE_FILE]: st });

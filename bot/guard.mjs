@@ -22,21 +22,22 @@ export const SECTOR_OF = {
   XOM: "XLE", CVX: "XLE", LLY: "XLV", UNH: "XLV", JNJ: "XLV",
 };
 
-export const ideaKey = it => it.src === "setup" ? `setup|${it.setup}|${it.dir}` : `fast|${it.kind}|${it.dir}`;
+export const ideaKey = it => it.src === "setup" ? `setup|${it.setup}|${it.dir}` : it.src === "ta" || it.src === "wma" ? `${it.src}|${it.name}|${it.dir}` : `fast|${it.kind}|${it.dir}`;
 export function keyLabel(key) {
   const [src, name, dir] = key.split("|"), d = dir === "C" ? "CALL" : "PUT";
-  return src === "setup" ? `${name} ${d} kurulumu` : `${name === "burst" ? "Ani hareket" : "Dönüş"} ${d} alarmı`;
+  return src === "setup" ? `${name} ${d} kurulumu` : src === "ta" ? `${name} ${d} formasyonu` : src === "wma" ? `200 WMA ${name} ${d}` : `${name === "burst" ? "Ani hareket" : "Dönüş"} ${d} alarmı`;
 }
 
 // 1 + 2: fikir türünün canlı durumu → { n, avg, paused: { s10, daysLeft } | null, trial, mult, tag }
 export function keyState(ideas, key, now = Date.now()) {
-  const done = (ideas || []).filter(i => i.res && i.res !== "geçersiz" && Number.isFinite(i.r) && ideaKey(i) === key).sort((a, b) => a.ts - b.ts);
+  const tsOf = x => x.ts ?? (x.d ? Date.parse(x.d + "T20:00:00Z") : NaN);       // günlük kayıtlarda yalnız tarih olabilir
+  const done = (ideas || []).filter(i => i.res && i.res !== "geçersiz" && Number.isFinite(i.r) && ideaKey(i) === key).sort((a, b) => tsOf(a) - tsOf(b));
   const n = done.length, sum = done.reduce((a, i) => a + i.r, 0);
   let paused = null, trial = false;
   if (n >= GUARD.MIN_N) {
     const last = done.slice(-GUARD.LAST), s10 = last.reduce((a, i) => a + i.r, 0);
     if (s10 < 0) {
-      const ago = (now - last.at(-1).ts) / 864e5;
+      const ago = (now - tsOf(last.at(-1))) / 864e5;
       if (ago < GUARD.COOL_DAYS) paused = { s10: +s10.toFixed(2), daysLeft: Math.max(1, Math.ceil(GUARD.COOL_DAYS - ago)) };
       else trial = true;
     }
@@ -49,7 +50,7 @@ export function keyState(ideas, key, now = Date.now()) {
 
 // Şu an durdurulmuş türler: [{ key, s10, daysLeft }]
 export function pausedList(ideas, now = Date.now()) {
-  const keys = [...new Set((ideas || []).filter(i => i.res && (i.src === "setup" ? i.setup : i.kind)).map(ideaKey))];
+  const keys = [...new Set((ideas || []).filter(i => i.res && (i.src === "setup" ? i.setup : i.src === "ta" || i.src === "wma" ? i.name : i.kind)).map(ideaKey))];
   return keys.map(key => ({ key, ...keyState(ideas, key, now).paused })).filter(x => x.s10 != null);
 }
 

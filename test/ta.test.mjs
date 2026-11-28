@@ -59,3 +59,41 @@ test("mesajlar sade; ayarlar var", () => {
   assert.ok(PREF_KEYS.formasyon && PREF_KEYS.wma200);
   assert.equal(TA.WMA_SIDE, 8);
 });
+
+import { tfMatch, sectorLead20, settleTa, fmtTaBook } from "../bot/ta.mjs";
+import { keyState, ideaKey, keyLabel } from "../bot/guard.mjs";
+
+test("kesişim: momentum / lider sektör / ikisi; sektör liderliği ilk 3 ve SPY'dan iyi", () => {
+  const sg = { dir: "C", trend: 1 };
+  assert.ok(tfMatch("tümü", sg, {}) && tfMatch("trendle", sg, {}));
+  assert.ok(!tfMatch("mom", sg, {}) && tfMatch("mom", sg, { mom: true }));
+  assert.ok(!tfMatch("ikisi", sg, { mom: true }) && tfMatch("ikisi", sg, { mom: true, lead: true }));
+  const L = sectorLead20({ SPY: 0.01, XLK: 0.05, XLF: 0.03, XLE: 0.02, XLV: 0.015, XLU: -0.01 });
+  assert.deepEqual([L.XLK, L.XLF, L.XLE, L.XLV, L.XLU], [true, true, true, false, false]);
+  assert.deepEqual(sectorLead20({ SPY: 0.05, XLK: 0.01 }), { XLK: false });
+});
+
+test("formasyon canlı karnesi: hedef/stop/süre; bugünün mumu sayılmaz; 200 WMA kapanışla", () => {
+  const day = k => Date.parse("2026-11-02T20:00:00Z") + k * 864e5;
+  const rows = Array.from({ length: 30 }, (_, k) => ({ ts: day(k), open: 100, high: 101, low: 99, close: 100 }));
+  const a = { src: "ta", name: "EW2", dir: "C", sym: "X", d: "2026-11-02", S: 100, stop: 98, target: 104 };
+  rows[3].high = 105;
+  assert.ok(settleTa(a, rows, "2026-12-30")); assert.equal(a.res, "HEDEF"); assert.equal(a.r, 2);
+  const b = { src: "ta", name: "EW2", dir: "C", sym: "X", d: "2026-11-02", S: 100, stop: 98, target: 104 };
+  assert.equal(settleTa(b, rows, "2026-11-05"), false);                       // ufuk dolmadı, hedef/stop yok (bugünün mumu hariç)
+  const w = { src: "wma", name: "UP", dir: "C", sym: "X", d: "2026-11-02", S: 100, stop: 97, target: null };
+  rows[5].close = 96;
+  assert.ok(settleTa(w, rows, "2026-12-30")); assert.equal(w.res, "STOP"); assert.equal(w.r, -1.33);
+  const t = fmtTaBook([a, w, b]);
+  assert.match(t, /EW2 CALL: 1 sonuçlandı · isabet %100 · ort \+2\.00R · açık 1/);
+  assert.match(t, /200 WMA UP: 1 sonuçlandı/);
+});
+
+test("formasyon türü 10 kayıptan sonra durur", () => {
+  const recs = Array.from({ length: 12 }, (_, k) => ({ src: "ta", name: "ABC", dir: "C", ts: Date.now() - (20 - k) * 864e5, d: "2026-11-01", res: "STOP", r: -1 }));
+  const noTs = recs.map(({ ts, ...x }) => ({ ...x, d: new Date(Date.now() - 3 * 864e5).toISOString().slice(0, 10) }));
+  assert.ok(keyState(noTs, "ta|ABC|C").paused);                                // yalnız tarihli kayıtta da durdurma çalışır
+  assert.equal(ideaKey(recs[0]), "ta|ABC|C");
+  assert.ok(keyState(recs, "ta|ABC|C").paused);
+  assert.equal(keyLabel("ta|ABC|C"), "ABC CALL formasyonu");
+});
