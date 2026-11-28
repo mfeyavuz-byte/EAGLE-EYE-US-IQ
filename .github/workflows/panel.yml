@@ -1,0 +1,41 @@
+name: Paneli yayınla (GitHub Pages)
+
+# panel/ klasörü değişince (ya da elle) siteyi yayınlar. Veriyi bot, herkese açık AYRI bir Gist'e (vars.PANEL_GIST_ID) yazar;
+# site o Gist'i okur. Hesap/pozisyon bilgisi hiçbir zaman panele yazılmaz.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "panel/**"
+      - ".github/workflows/panel.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Gist kimliğini yaz
+        env:
+          PID: ${{ vars.PANEL_GIST_ID }}
+        run: |
+          case "$PID" in *[!0-9a-fA-F]*) echo "PANEL_GIST_ID geçersiz"; exit 1;; esac
+          printf 'window.PANEL_GIST = "%s";\n' "$PID" > panel/config.js
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: panel
+      - id: deployment
+        uses: actions/deploy-pages@v4

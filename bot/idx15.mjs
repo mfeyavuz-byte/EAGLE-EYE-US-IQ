@@ -260,11 +260,11 @@ async function main() {
   setSizing(prefs);                                                            // /hesap → kontrat sayısı
   const ev = await macroEvents().catch(() => []);
   let ok = true;
-  if (isOn(prefs, "plan15")) { ok = await sendTG(await buildPlans(new Date(), { ev })); console.log(`[15dk] plan ${ok ? "gönderildi" : "GÖNDERİLEMEDİ"}.`); }
+  if (isOn(prefs, "plan15")) { ok = await sendTG(await buildPlans(new Date(), { ev }), { panel: "plan" }); console.log(`[15dk] plan ${ok ? "gönderildi" : "GÖNDERİLEMEDİ"}.`); }
   // Saatlik (10:30, 11:30 … 15:30 NY): en hacimli 25 hisse
   if (isOn(prefs, "saatlik") && (process.env.FORCE === "1" || (mins % 60 >= 30 && mins % 60 < 45 && mins >= 630))) {
     const h = await buildHourly(new Date()).catch(e => (console.error("[saatlik]", e?.message || e), null));
-    if (h) console.log(`[saatlik] ${(await sendTG(h)) ? "gönderildi" : "GÖNDERİLEMEDİ"}.`);
+    if (h) console.log(`[saatlik] ${(await sendTG(h, { panel: "saatlik" })) ? "gönderildi" : "GÖNDERİLEMEDİ"}.`);
   }
   return ok ? 0 : 1;
 }

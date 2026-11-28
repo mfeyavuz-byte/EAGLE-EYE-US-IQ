@@ -77,7 +77,7 @@ async function reboundStep(st, today, all) {
   }
   st.rebDay = today;
   const txt = fmtRebound(out);
-  if (txt) await sendTG(txt);
+  if (txt) await sendTG(txt, { panel: "donus" });
   console.log(`[Dönüş] aday ${cands.length} · kaliteli ${out.length}`);
 }
 // 1–2 AY TUTUŞ (haftada 1, haftanın ilk işlem günü 15:30–15:50 NY): yalnız research/hold.mjs testi geçtiyse (abd_hold.json use)
@@ -103,7 +103,7 @@ async function holdStep(st, today) {
   }
   const txt = fmtHold(list, cfg);
   st.holdLast = txt ? { d: today, txt } : null;
-  if (txt) await sendTG(txt);
+  if (txt) await sendTG(txt, { panel: "tutus" });
   console.log(`[Tutuş] ${cfg.variant}: aday ${cands.length} · liste ${list.length}`);
 }
 // ---------- Kullanıcı komutları: ayarlar, hesap, pozisyonlar ----------
@@ -182,7 +182,7 @@ async function premarketStep(st) {
   const list = pmMovers(q, Date.now(), 8);
   if (!list.length) return;
   for (const x of list) x.news = (await news(x.sym, 1).catch(() => []))[0]?.headline || null;
-  await sendTG(fmtPmMovers(list));
+  await sendTG(fmtPmMovers(list), { panel: "premarket" });
 }
 // Gün sonu (16:05–18:00 NY, günde 1): tek satır karne
 async function eodStep(st, books) {
@@ -192,7 +192,7 @@ async function eodStep(st, books) {
   if (!isOn(st.prefs, "gunsonu") || (await isTradingDay(today)) === false) return;
   const d0 = nyTs(today, 0, 0), ideas = (books?.fast?.ideas || []).filter(it => it.ts >= d0);
   const paper = await paperTrips(1).catch(() => null);
-  await sendTG(fmtEod(ideas, paper));
+  await sendTG(fmtEod(ideas, paper), { panel: "gunsonu" });
 }
 
 async function nextTradingDay(today) {
@@ -224,7 +224,7 @@ async function earningsStep(st, today, mins) {
   if (st.earn.day === today || mins < 900 || mins >= 950 || !isOn(st.prefs, "bilanco")) return;
   const nextDay = await nextTradingDay(today);
   const { text, buys } = await buildEarnings(today, nextDay, { earningsOn, reportDates, optionChain, fetchDaily, inUniverse: s => SYMS.includes(s) });
-  if (text && !(await sendTG(text))) return;                                // alınacak yoksa mesaj yok
+  if (text && !(await sendTG(text, { panel: "bilanco" }))) return;                                // alınacak yoksa mesaj yok
   st.earn.day = today;
   for (const b of buys) {
     const id = `earn-${b.sym}-${today}`;
@@ -430,7 +430,7 @@ async function morningStep(st, ctx) {
     fg: fgNow?.fg ?? null,
   });
   const macro = fmtMacroDay(await macroEvents().catch(() => []), today);   // CPI / istihdam / FOMC günü uyarısı
-  if (await sendTG(macro ? `${text}\n\n${macro}` : text, { buttons: [[{ text: "⚡ SPY/QQQ durumu", data: "/etf" }, { text: "🌅 Sabah karnesi", data: "/sabah" }]] })) {
+  if (await sendTG(macro ? `${text}\n\n${macro}` : text, { panel: "sabah", buttons: [[{ text: "⚡ SPY/QQQ durumu", data: "/etf" }, { text: "🌅 Sabah karnesi", data: "/sabah" }]] })) {
     st.morning.day = today;
     st.morning.book.push(...calls);
     st.om ||= initOptModel(today);
@@ -734,7 +734,7 @@ export async function main() {
   // --- GÜNLÜK CANLI VERİ DENETİMİ (seansın ilk taraması, 09:35 NY sonrası): tüm kaynakların yaşı/uyumu Telegram'a ---
   if (isRegularHours() && st.auditDay !== today && mins >= 575) {
     const a = await liveAudit(st).catch(e => ({ text: "🔎 Canlı veri denetimi yapılamadı: " + (e?.message || e) }));
-    if (await sendTG(a.text)) st.auditDay = today;
+    if (await sendTG(a.text, { panel: "veri" })) st.auditDay = today;
   }
 
   // --- Spot sinyalleri: aynı gün aynı sinyali tekrar gönderme ---
@@ -761,7 +761,7 @@ export async function main() {
     const ai = await aiComments(fresh.map(x => aiItem(x, { sector: UNI.meta?.[x.sym]?.sec })));
     if (Object.keys(ai).length) m += `\n🧠 Yorum (yapay zekâ · ${AI_MODEL} · yalnız yukarıdaki metriklere dayanır)\n` + Object.entries(ai).map(([k, v]) => `• ${k}: ${v}`).join("\n") + "\n";
     const btn = fresh.slice(0, 16).map(s => ({ text: `${s.signal === "AL" ? "🟢" : "🔴"} ${s.sym}`, data: `/hisse ${s.sym}` }));
-    if (await sendTG(m, { buttons: Array.from({ length: Math.ceil(btn.length / 4) }, (_, k) => btn.slice(k * 4, k * 4 + 4)) })) {
+    if (await sendTG(m, { panel: "hisse", buttons: Array.from({ length: Math.ceil(btn.length / 4) }, (_, k) => btn.slice(k * 4, k * 4 + 4)) })) {
       st.lastHeaderDay = today;
       logSignals((st.spotBook ||= []), fresh, today, spyPx);           // canlı spot karnesi
       st.om ||= initOptModel(today);                                     // 3 aylık kol: en iyi 2 AL (call) + en iyi SAT (put)
@@ -826,7 +826,7 @@ export async function main() {
   if (st.spotBook?.length) {
     const px = new Map(all.map(a => [a.sym, a.price]));
     const exits = checkExits(st.spotBook, today, s => px.get(s), spyPx);
-    if (exits.length && !(await sendTG(fmtExits(exits)))) {
+    if (exits.length && !(await sendTG(fmtExits(exits), { panel: "hisse" }))) {
       exits.forEach(b => { delete b.closed; });                       // gönderilemedi → sonraki run'da tekrar
     }
   }
@@ -906,7 +906,7 @@ export async function main() {
         ? loadChain(sym, r, { minDte: 0, maxDte: 400, targets: [Math.max(0, (expTs - Date.now() / 1e3) / 86400)] })
         : loadChain(sym, r, { minDte: ETF_OPT.DTE, maxDte: ETF_OPT.DTE + 30, targets: [ETF_OPT.DTE + 2] }),
     });
-    for (const l of lines) await sendTG(l, { buttons: [[{ text: "⚡ SPY/QQQ durumu", data: "/etf" }]] });
+    for (const l of lines) await sendTG(l, { panel: "etf", buttons: [[{ text: "⚡ SPY/QQQ durumu", data: "/etf" }]] });
     st.om ||= initOptModel(today);                                       // aylık kol: bugün açılan ETF fırsatları
     for (const p of Object.values(st.etf?.pos || {})) if (p.d === today && !p.omq) { queue(st.om, today, "M", p.sym, p.type || "C", `ETF ${p.kind || "rsi"}`); p.omq = true; }
   }

@@ -1,6 +1,7 @@
 // Telegram — gönderim + komut okuma (getUpdates).
 // DRY_RUN=1 → mesajlar gönderilmez, konsola yazılır (yerel test).
 // ÖNEMLİ: Bu bot için AYRI bir token kullan (bist-bot ile aynı token'ı iki workflow okursa komutlar kaybolur).
+import { panelRecord } from "./panel.mjs";
 const TOKEN = process.env.TG_TOKEN || "";
 export const CHAT = process.env.TG_CHAT || "";
 const DRY = process.env.DRY_RUN === "1";
@@ -30,10 +31,12 @@ export function keyboard(buttons) {
   return rows.length ? { inline_keyboard: rows } : null;
 }
 
-export async function sendTG(text, { buttons = null } = {}) {
+// panel: "plan" | "fikir" | ... → mesaj web paneline de kaydedilir (bot/panel.mjs; kişisel satırlar silinir). Komut cevapları etiketlenmez.
+export async function sendTG(text, { buttons = null, panel = null } = {}) {
   const kb = keyboard(buttons);
   if (DRY || !tgEnabled()) {
     console.log("\n----- [TG] -----\n" + text + (kb ? "\n[butonlar] " + kb.inline_keyboard.map(r => r.map(b => b.text).join(" | ")).join(" / ") : "") + "\n----------------");
+    if (panel) panelRecord(panel, text);
     return true;
   }
   let ok = true;
@@ -59,6 +62,7 @@ export async function sendTG(text, { buttons = null } = {}) {
     if (!sent) ok = false;
     if (i < parts.length - 1) await sleep(1100);
   }
+  if (ok && panel) panelRecord(panel, text);
   return ok;
 }
 

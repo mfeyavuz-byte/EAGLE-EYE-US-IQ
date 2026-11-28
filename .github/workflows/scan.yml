@@ -56,6 +56,7 @@ jobs:
       - name: Kesintisiz döngü (tarama 10 dk · SPY/QQQ fikri 15 dk · ~5,5 saat)
         id: loop
         env:
+          PANEL_GIST_ID: ${{ vars.PANEL_GIST_ID }}
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_CHAT: ${{ secrets.TG_CHAT }}
           GH_GIST_TOKEN: ${{ secrets.GH_GIST_TOKEN }}

@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0f19">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>EAGLE-EYE US Panel</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" href="icon-192.png">
+<style>
+  :root {
+    --bg: #0b0f19; --card: #141b2b; --card2: #1a2336; --line: #263149; --tx: #e6ebf5; --mut: #8b97b0;
+    --gold: #f0b93c; --up: #2fd07c; --dn: #ff5d6c; --warn: #ffb347;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--tx); font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  header { position: sticky; top: 0; z-index: 5; background: rgba(11,15,25,.94); backdrop-filter: blur(8px);
+    padding: calc(env(safe-area-inset-top) + 10px) 16px 10px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 10px; }
+  header h1 { font-size: 16px; margin: 0; letter-spacing: .3px; }
+  header h1 b { color: var(--gold); }
+  .pill { margin-left: auto; font-size: 12px; padding: 4px 9px; border-radius: 99px; background: var(--card2); color: var(--mut); white-space: nowrap; }
+  .pill.ok { color: var(--up); } .pill.old { color: var(--warn); } .pill.err { color: var(--dn); }
+  main { padding: 12px 16px calc(env(safe-area-inset-bottom) + 84px); max-width: 760px; margin: 0 auto; }
+  section { display: none; } section.on { display: block; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .8px; color: var(--mut); margin: 18px 2px 8px; font-weight: 600; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; margin-bottom: 10px; }
+  .card .t { font-size: 12px; color: var(--mut); margin-bottom: 6px; display: flex; justify-content: space-between; gap: 8px; }
+  .txt { white-space: pre-wrap; word-break: break-word; font-size: 14px; }
+  .empty { color: var(--mut); font-size: 14px; padding: 6px 2px 2px; }
+  .row { display: grid; grid-template-columns: auto 1fr auto; gap: 4px 10px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line); }
+  .row:first-child { border-top: 0; padding-top: 0; }
+  .sym { font-weight: 700; } .sub { color: var(--mut); font-size: 13px; grid-column: 1 / -1; }
+  .C { color: var(--up); } .P { color: var(--dn); }
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .stat { background: var(--card2); border-radius: 10px; padding: 9px 10px; }
+  .stat .k { font-size: 11px; color: var(--mut); } .stat .v { font-size: 17px; font-weight: 700; margin-top: 2px; }
+  .bar { display: grid; grid-template-columns: 52px 1fr 64px; align-items: center; gap: 8px; font-size: 13px; padding: 3px 0; }
+  .track { position: relative; height: 10px; background: var(--card2); border-radius: 6px; }
+  .track i { position: absolute; top: 0; height: 10px; border-radius: 6px; }
+  .track:after { content: ""; position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--line); }
+  nav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; display: grid; grid-template-columns: repeat(4, 1fr);
+    background: rgba(14,19,31,.97); border-top: 1px solid var(--line); padding: 6px 6px calc(env(safe-area-inset-bottom) + 6px); }
+  nav button { background: none; border: 0; color: var(--mut); font: inherit; font-size: 12px; padding: 6px 0; border-radius: 10px; cursor: pointer; }
+  nav button span { display: block; font-size: 19px; line-height: 1.2; }
+  nav button.on { color: var(--gold); background: var(--card2); }
+  .note { color: var(--mut); font-size: 12px; text-align: center; margin-top: 18px; }
+  .setup { max-width: 560px; margin: 40px auto; }
+  .setup code { background: var(--card2); padding: 2px 6px; border-radius: 6px; }
+</style>
+</head>
+<body>
+<header><h1>🦅 EAGLE-EYE <b>US</b></h1><span id="st" class="pill">yükleniyor…</span></header>
+<main>
+  <section id="today" class="on"></section>
+  <section id="stocks"></section>
+  <section id="market"></section>
+  <section id="karne"></section>
+</main>
+<nav>
+  <button data-s="today" class="on"><span>⚡</span>Bugün</button>
+  <button data-s="stocks"><span>📈</span>Hisseler</button>
+  <button data-s="market"><span>🌐</span>Piyasa</button>
+  <button data-s="karne"><span>📒</span>Karne</button>
+</nav>
+<script src="config.js"></script>
+<script>
+"use strict";
+const G = new URLSearchParams(location.search).get("g") || window.PANEL_GIST || "";
+const REFRESH = 120e3, $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const trTime = ts => new Date(ts).toLocaleString("tr-TR", { timeZone: "Europe/Istanbul", hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit" });
+const ago = ts => { const m = Math.round((Date.now() - ts) / 60e3); return m < 1 ? "az önce" : m < 60 ? `${m} dk önce` : m < 1440 ? `${Math.round(m / 60)} sa önce` : `${Math.round(m / 1440)} gün önce`; };
+const pct = x => (x == null ? "—" : `${x >= 0 ? "+" : "−"}%${Math.abs(x * 100).toFixed(2)}`);
+const LAB = { plan: "15 dk plan", saatlik: "Saatlik liste", fikir: "Fikir", cikis: "Çıkış", tutus: "1–2 ay tutuş", donus: "Aşırı satım dönüşü",
+  hisse: "Hisse sinyalleri", premarket: "Açılış öncesi", bilanco: "Bilanço", etf: "SPY/QQQ kısa vade", sabah: "Sabah", veri: "Veri denetimi",
+  gunsonu: "Gün sonu", karne: "Karne" };
+
+const card = (x, title) => `<div class="card"><div class="t"><span>${esc(title || LAB[x.cat] || x.cat)}</span><span>${trTime(x.ts)} TR · ${ago(x.ts)}</span></div><div class="txt">${esc(x.text)}</div></div>`;
+const latest = (feed, cat) => [...feed].reverse().find(x => x.cat === cat);
+const block = (feed, cat, h, emptyTxt) => { const x = latest(feed, cat); return `<h2>${esc(h || LAB[cat])}</h2>` + (x ? card(x) : `<div class="empty">${esc(emptyTxt || "Henüz yok.")}</div>`); };
+
+function render(p) {
+  const feed = p.feed || [], since = Date.now() - 18 * 3600e3;
+  // BUGÜN
+  const open = p.open || [];
+  const ideas = feed.filter(x => (x.cat === "fikir" || x.cat === "cikis") && x.ts >= since).reverse();
+  $("#today").innerHTML =
+    `<h2>Açık fikirler</h2>` + (open.length ? `<div class="card">${open.map(o => `<div class="row"><span class="sym ${o.dir}">${esc(o.sym)} ${o.dir === "C" ? "CALL" : "PUT"}</span>
+      <span>${esc(o.contract || "")}</span><span class="sub" style="grid-column:auto">${ago(o.ts)}</span>
+      <span class="sub">Giriş ${o.S?.toFixed?.(2) ?? "—"} · Hedef ${o.target ?? "—"} · Stop ${o.stop ?? "—"}</span></div>`).join("")}</div>` : `<div class="empty">Şu an açık fikir yok.</div>`) +
+    block(feed, "plan", "Son 15 dk plan", "Plan seans içinde her çeyrekte gelir (TR 17:45 sonrası).") +
+    `<h2>Bugünkü fikirler ve çıkışlar</h2>` + (ideas.length ? ideas.map(x => card(x)).join("") : `<div class="empty">Bugün henüz fikir yok.</div>`) +
+    block(feed, "saatlik", "Saatlik liste", "Saatlik liste seans içinde gelir (TR 18:30 sonrası).");
+  // HİSSELER
+  $("#stocks").innerHTML = block(feed, "tutus", "1–2 ay tutuş", "Haftanın ilk işlem günü ~22:30 TR gelir (yalnız test geçtiyse).") +
+    block(feed, "donus", "Aşırı satım dönüşü", "Uygun aday çıkınca ~22:30 TR gelir.") +
+    block(feed, "hisse", "Hisse sinyalleri", "Yeni hisse sinyali yok.") +
+    block(feed, "premarket", "Açılış öncesi hareketliler", "Seans öncesi ~17:00 TR gelir.") +
+    block(feed, "bilanco", "Bilanço", "Bilanço fırsatı yok.") +
+    block(feed, "etf", "SPY/QQQ kısa vade", "Sinyal yok.");
+  // PİYASA
+  const it = p.internals, ld = p.lead;
+  let mk = `<h2>Piyasa içi</h2>`;
+  mk += it ? `<div class="card"><div class="stats">
+      <div class="stat"><div class="k">Gün tipi</div><div class="v">${esc(it.dt || "—")}</div></div>
+      <div class="stat"><div class="k">Büyük hisse VWAP üstü</div><div class="v">${it.mb == null ? "—" : "%" + Math.round(it.mb * 100)}</div></div>
+      <div class="stat"><div class="k">Son 5 dk yükselen</div><div class="v">${it.up ? `${it.up.u}/${it.up.n}` : "—"}</div></div>
+    </div><div class="t" style="margin:8px 0 0">${it.ts ? "ölçüm " + ago(it.ts) : ""}</div></div>` : `<div class="empty">Seans içinde güncellenir.</div>`;
+  mk += `<h2>Sektörler — bugün SPY'a göre</h2>`;
+  if (ld?.rel) {
+    const rows = Object.entries(ld.rel).sort((a, b) => b[1] - a[1]), mx = Math.max(0.005, ...rows.map(r => Math.abs(r[1])));
+    mk += `<div class="card"><div class="t"><span>SPY ${pct(ld.spy)}</span><span>${ago(ld.ts)}</span></div>` + rows.map(([s, v]) => {
+      const w = Math.min(50, Math.abs(v) / mx * 50);
+      return `<div class="bar"><span>${esc(s)}</span><span class="track"><i style="${v >= 0 ? `left:50%;width:${w}%;background:var(--up)` : `left:${50 - w}%;width:${w}%;background:var(--dn)`}"></i></span><span style="text-align:right" class="${v >= 0 ? "C" : "P"}">${pct(v)}</span></div>`;
+    }).join("") + `</div>`;
+  } else mk += `<div class="empty">Seans içinde, ilk fikir kontrolünden sonra görünür.</div>`;
+  mk += block(feed, "sabah", "Sabah mesajı", "İşlem günleri ~15:30 TR gelir.") + block(feed, "veri", "Veri denetimi", "Seansın başında gelir.");
+  $("#market").innerHTML = mk;
+  // KARNE
+  const pz = p.paused || [];
+  $("#karne").innerHTML = `<h2>Gün içi fikir karnesi</h2>` + (p.karne ? `<div class="card"><div class="txt">${esc(p.karne)}</div></div>` : `<div class="empty">Henüz yok.</div>`) +
+    (pz.length ? `<h2>Durdurulan türler</h2><div class="card">${pz.map(x => `<div class="row"><span class="sym">${esc(x.key.split("|").slice(1).join(" "))}</span><span>son 10: ${x.s10}R</span><span class="sub" style="grid-column:auto">${x.daysLeft} gün</span></div>`).join("")}</div>` : "") +
+    block(feed, "gunsonu", "Gün sonu", "Kapanıştan sonra gelir.") +
+    `<p class="note">Telegram'daki bot mesajlarının aynısı · yalnız piyasa fikirleri (hesap ve pozisyon bilgisi yok)</p>`;
+}
+
+function status(p, err) {
+  const el = $("#st");
+  if (err && !p) { el.className = "pill err"; el.textContent = err; return; }
+  const m = (Date.now() - p.ts) / 60e3;
+  el.className = "pill " + (err ? "err" : m <= 20 ? "ok" : "old");
+  el.textContent = (err ? "bağlantı yok · " : "") + "güncellendi " + ago(p.ts);
+}
+
+let last = null;
+async function load() {
+  if (!G && !new URLSearchParams(location.search).get("f")) {
+    $("#today").innerHTML = `<div class="setup card"><b>Panel kurulumu bekleniyor</b><p class="txt">Depo ayarlarında <code>PANEL_GIST_ID</code> değişkeni tanımlanınca panel kendiliğinden dolar.</p></div>`;
+    $("#st").textContent = "kurulum yok"; return;
+  }
+  try {
+    const F = new URLSearchParams(location.search).get("f");                       // yerel deneme: ?f=ornek.json
+    if (F && /^[\w.-]+\.json$/.test(F)) { const p = await (await fetch(F, { cache: "no-store" })).json(); last = p; render(p); status(p); return; }
+    const r = await fetch(`https://api.github.com/gists/${encodeURIComponent(G)}`, { cache: "no-store" });
+    if (!r.ok) throw new Error(r.status === 403 ? "istek sınırı, birazdan" : "hata " + r.status);
+    const f = (await r.json()).files?.["panel.json"];
+    if (!f) throw new Error("veri henüz yok");
+    const p = JSON.parse(f.truncated ? await (await fetch(f.raw_url, { cache: "no-store" })).text() : f.content);
+    last = p; try { localStorage.setItem("panel", JSON.stringify(p)); } catch {}
+    render(p); status(p);
+  } catch (e) {
+    if (!last) { try { last = JSON.parse(localStorage.getItem("panel") || "null"); } catch {} if (last) render(last); }
+    status(last, e.message || "bağlantı yok");
+  }
+}
+document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("nav button, section").forEach(x => x.classList.remove("on"));
+  b.classList.add("on"); $("#" + b.dataset.s).classList.add("on"); scrollTo(0, 0);
+  try { localStorage.setItem("tab", b.dataset.s); } catch {}
+});
+try { const t = localStorage.getItem("tab"); if (t) document.querySelector(`nav button[data-s="${t}"]`)?.click(); } catch {}
+load(); setInterval(load, REFRESH);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) load(); });
+setInterval(() => last && status(last), 30e3);
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+</script>
+</body>
+</html>

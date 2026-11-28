@@ -19,14 +19,15 @@ import { PREFS_FILE, isOn } from "./prefs.mjs";
 import { closeTsOf } from "../data/market.mjs";
 import { sendTG } from "./telegram.mjs";
 import { loadFiles, saveFiles, READ_FAILED } from "./state.mjs";
-import { IDEA_FILES, HORIZON, addIdea, settleIdeas } from "./ideabook.mjs";
+import { IDEA_FILES, HORIZON, addIdea, settleIdeas, fmtIdeaReport } from "./ideabook.mjs";
+import { panelEnabled, PANEL, readFeed, seedFeed, loadPanel, buildSnapshot, publishPanel } from "./panel.mjs";
 import { macroEvents, nearEvent, fmtNear } from "./macro.mjs";
 import { freshPrice, ageTxt } from "./liveaudit.mjs";
 import { paperBuy, paperClose, warnPaperFail, paperQty } from "./optpaper.mjs";
 import { GUARD, guardDecision, clusterMembers, corrRet, computeLead, pausedList, keyLabel } from "./guard.mjs";
 import { TUNE_FILE, tunedValue } from "./tune.mjs";
 import { dayFeatures, setupsAt, breadthSeries, dayType, features } from "./setups.mjs";
-import { SETUPS_FILE, allowedFor, SETUP_LABEL, MEMBERS, modelCheck, INTERNALS_FILE } from "./setuplive.mjs";
+import { SETUPS_FILE, allowedFor, SETUP_LABEL, MEMBERS, modelCheck, INTERNALS_FILE, readInternals } from "./setuplive.mjs";
 import { pushOpenLocal, readOpenLocal, ideaId, checkExit, optValue, fmtExit } from "./exits.mjs";
 
 const ETFS = new Set(["SPY", "QQQ", "IWM", "DIA"]);
@@ -155,7 +156,7 @@ async function pauseNotices(book, prefs, now) {
   let ch = false;
   for (const p of pl) {
     if (note[p.key] || !isOn(prefs, p.key.startsWith("setup") ? "kurulum" : "ani")) continue;
-    if (await sendTG(`⏸ ${keyLabel(p.key)} durduruldu — canlıda son 10 fikir toplam ${p.s10}R. ${p.daysLeft} gün sonra ×${GUARD.TRIAL} adetle yeniden denenir.`)) { note[p.key] = now; ch = true; }
+    if (await sendTG(`⏸ ${keyLabel(p.key)} durduruldu — canlıda son 10 fikir toplam ${p.s10}R. ${p.daysLeft} gün sonra ×${GUARD.TRIAL} adetle yeniden denenir.`, { panel: "karne" })) { note[p.key] = now; ch = true; }
   }
   for (const k of Object.keys(note)) if (!pl.some(p => p.key === k)) { delete note[k]; ch = true; }
   return ch;
@@ -203,7 +204,7 @@ export async function scanFast(st, now = Date.now(), toCloseMin = null, opts = {
     const text = [`${title} · ${sig.dir === "C" ? "🟢" : "🔴"} ${sym} ${sig.dir === "C" ? "CALL" : "PUT"} AL — ${c.contract}`, ...c.lines,
       ...(near ? ["   " + near] : []),
       ...(i === 0 && rest.length ? [`   Aynı anda: ${rest.map(x => `${x.sym} ${x.sig.dir === "C" ? "↑" : "↓"}`).join(" ")}`] : [])].join("\n");
-    if (await sendTG(text)) {
+    if (await sendTG(text, { panel: "fikir" })) {
       st.cd[sym] = now; st.n++; sent++;
       const it = { src: "fast", sym, dir: sig.dir, kind: sig.kind, ts: now, S: sig.S, stop: sig.stop, target: sig.target, hor: HORIZON.fast,
         z: Math.abs(sig.z), mult: g.mult, tstop: c.timeStop, expClose: c.expClose, ...(c.pick ? { occ: c.pick.sym, K: c.pick.K, exp: c.expD, prem: c.pick.prem, iv: +c.pick.iv.toFixed(4) } : {}) };
@@ -241,7 +242,7 @@ export async function monitorExits(st, book, now = Date.now(), toCloseMin = 999)
     if (!ex) continue;
     const closed = it.paper ? !!(await paperClose(it.occ).catch(() => null)) : false;
     const val = it.exp ? optValue(it, ex.px, now, it.expClose ?? await closeTsOf(it.exp)) : null;   // GERÇEK vade kapanışıyla
-    if (await sendTG(fmtExit(it, ex, val, closed))) {
+    if (await sendTG(fmtExit(it, ex, val, closed), { panel: "cikis" })) {
       (st.exits ||= {})[it.id] = now;
       if (book) (book.exits ||= {})[it.id] = now;
       sent++;
@@ -305,7 +306,7 @@ export async function scanSetups(st, now, toCloseMin, opts = {}) {
       const cc = await contractIdea({ sym, dir: c.dir, S, stop, target, r, today, allow0: (closeMs - now) / 60e3 > 90 && (st.ab = !st.ab), timeStop: capStop(a.hor, closeMs, now), mult: g.mult, multTag: g.tag });
       const near = fmtNear(nearEvent(opts.ev, now), now);
       const text = [`🎯 ${sym} ${c.dir === "C" ? "CALL" : "PUT"} AL — ${cc.contract}`, `   ${SETUP_LABEL[c.name][c.dir]} (test: ort +${a.m.toFixed(2)}R${mc.p != null ? ` · olasılık %${Math.round(mc.p * 100)}` : ""})`, ...cc.lines, ...(near ? ["   " + near] : [])].join("\n");
-      if (!(await sendTG(text))) continue;
+      if (!(await sendTG(text, { panel: "fikir" }))) continue;
       st.setCd[ck] = now; sent++;
       const it = { src: "setup", setup: c.name, sym, dir: c.dir, ts: now, S, stop, target, hor: a.hor, mult: g.mult, tstop: cc.timeStop, expClose: cc.expClose,
         ...(cc.pick ? { occ: cc.pick.sym, K: cc.pick.K, exp: cc.expD, prem: cc.pick.prem, iv: +cc.pick.iv.toFixed(4) } : {}) };
@@ -329,6 +330,22 @@ function upCount(mem, ts) {
 }
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+// WEB PANELİ yayını (bot/panel.mjs): seans içinde 2 dk, dışında 15 dk'da bir. Yeni makinede yerel kayıt boşsa yayındaki panelden doldurulur.
+let pubAt = 0, seeded = false;
+async function panelStep(st, book, open) {
+  if (!panelEnabled() || Date.now() - pubAt < (open ? PANEL.PUB_MS : PANEL.PUB_IDLE_MS)) return;
+  pubAt = Date.now();
+  if (!seeded) {
+    seeded = true;
+    const prev = await loadPanel(), local = readFeed(), seen = new Set(local.map(x => x.ts + "|" + x.cat));
+    const add = (prev?.feed || []).filter(x => x?.ts && !seen.has(x.ts + "|" + x.cat));
+    if (add.length) seedFeed([...add, ...local].sort((a, b) => a.ts - b.ts));
+  }
+  const now = Date.now(), done = { ...(book?.exits || {}), ...(st.exits || {}) };
+  const openIdeas = readOpenLocal().filter(o => o.id && !done[o.id] && o.ts <= now && now - o.ts < 6 * 3600e3);
+  await publishPanel(buildSnapshot({ feed: readFeed(), internals: readInternals(now, 30 * 60e3), lead: st.lead,
+    karne: book ? fmtIdeaReport({ fast: book }, now) : null, paused: book ? pausedList(book.ideas, now) : [], open: openIdeas, now }));
+}
 // Uzun yaşayan döngü: ~55 dk çalışır, sonra çıkar (iş akışı yeniden başlatır). FAST_ONCE=1 → tek tarama (test).
 async function main() {
   const once = process.env.FAST_ONCE === "1", t0 = Date.now();
@@ -363,6 +380,7 @@ async function main() {
         saveSt(st);
       }
       else if (once) console.log("[⚡] seans dışı.");
+      await panelStep(st, book, open).catch(e => console.error("[panel]", e?.message || e));
       if ((open || process.env.FORCE === "1") && isOn(prefs, "cikis")) {
         if (await monitorExits(st, book, Date.now(), toClose).catch(e => { console.error("[çıkış]", e?.message || e); return 0; }) && book) await saveFiles({ [IDEA_FILES.fast]: book });
         saveSt(st);
