@@ -1,0 +1,34 @@
+name: Tutuş testi (1–2 ay)
+
+# 1–2 ay tutuş listesi varyantları (Stage-2, Stage-2 + zirve, 6 ay momentum) 2015 sonrası günlük veriyle walk-forward ölçülür.
+# Sonuç Gist'e (abd_hold.json) yazılır → canlı bot yalnız test geçtiyse haftalık liste gönderir.
+# Haftalık kendiliğinden (Pazar) + sonuç yoksa/8 günden eskiyse ana bot zinciri tetikler + elle.
+on:
+  schedule:
+    - cron: "30 8 * * 0"
+  workflow_dispatch:
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+      - name: Araştırma
+        env:
+          GH_GIST_TOKEN: ${{ secrets.GH_GIST_TOKEN }}
+          GIST_ID: ${{ secrets.GIST_ID }}
+        run: |
+          set -o pipefail
+          node research/hold.mjs | tee out.txt
+          { echo '```'; sed -n '/^SONUÇ/,$p' out.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Sonucu Telegram'a gönder
+        if: always()
+        env:
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CHAT: ${{ secrets.TG_CHAT }}
+          BT_INFO: "Tutuş testi · commit ${{ github.sha }}"
+        run: node options/send-report.mjs out.txt

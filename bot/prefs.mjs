@@ -4,7 +4,7 @@ export const PREFS_FILE = "abd_prefs.json";
 export const PREF_KEYS = {
   sabah: "Sabah mesajı", premarket: "Açılış öncesi hareketliler", plan15: "15 dk plan (SPY/QQQ/GLD/SLV)", saatlik: "Saatlik 25 hisse",
   kurulum: "Ölçülmüş kurulumlar", ani: "Ani hareket alarmı", cikis: "Çıkış mesajları", spot: "Hisse AL/SAT sinyalleri",
-  donus: "Aşırı satım dönüşü", bilanco: "Bilanço straddle", pozisyon: "Pozisyon uyarıları", gunsonu: "Gün sonu karne",
+  donus: "Aşırı satım dönüşü", bilanco: "Bilanço straddle", pozisyon: "Pozisyon uyarıları", gunsonu: "Gün sonu karne", tutus: "1–2 ay tutuş listesi",
 };
 export const defaultPrefs = () => ({ on: {}, acct: null, risk: 0.01 });
 export const isOn = (p, k) => p?.on?.[k] !== false;                  // varsayılan: açık

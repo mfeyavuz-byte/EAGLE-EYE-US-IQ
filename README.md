@@ -261,6 +261,13 @@ Opsiyon testi: AL → call, SAT → put (≥35 gün, delta ≈ 0.6), giriş siny
 Hayatta kalan yanlılığına karşı: `F_PIT=sp500_ticker_start_end.csv` ile araştırma her tarihte yalnız o günkü S&P 500
 üyelerini kullanır (fja05680/sp500).
 
+**Fikir koruyucu** (`bot/guard.mjs`, ani hareket + kurulum fikirleri): canlı karnede son 10 fikri ekside olan tür 30 gün durur,
+sonra ×0.6 adetle yeniden denenir · adet canlı ortalama R'ye göre ×0.6 / ×1 / ×1.3 (küçük örnek sıfıra çekilir) · aynı yönde,
+aynı sektörde (ya da 1 dk korelasyon ≥ 0.8) açık fikir varken 2. fikir yarım adet, 3.'sü yok; **lider sektörde** (SPY'dan
+≥ %0.5 iyi, ilk 3) 2 tam + 1 yarım. **Varsayım testi:** aynı mumda hedef + stop → stop sayılır; araştırma ters varsayımın
+farkını da yazar. **1–2 ay tutuş** (`bot/hold.mjs`, `research/hold.mjs`, Actions → **Tutuş testi**): her tarihte o günün en
+likit 150 S&P 500 hissesi, aylık walk-forward; yalnız test geçerse haftalık liste (`/tutus`).
+
 ## Kurulum
 1. **Yeni Telegram botu:** @BotFather → `/newbot` → token. @userinfobot → chat ID. Kendi botuna `/start` yaz.
    ⚠ bist-bot ile **aynı token'ı kullanma** — iki bot aynı token'dan komut okursa birbirinin komutlarını yutar.

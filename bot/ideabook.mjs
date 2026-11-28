@@ -21,7 +21,7 @@ export function settleOne(it, bars, now = Date.now()) {
   const up = it.dir === "C";
   for (const b of w) {
     const hitS = up ? b.low <= it.stop : b.high >= it.stop, hitT = up ? b.high >= it.target : b.low <= it.target;
-    if (hitS) { it.res = "STOP"; it.r = -1; return true; }
+    if (hitS) { it.res = "STOP"; it.r = -1; if (hitT) it.amb = true; return true; }
     if (hitT) { it.res = "HEDEF"; it.r = +(Math.abs(it.target - it.S) / R).toFixed(2); return true; }
   }
   if (!w.length && now - end < 3 * 864e5) return false;            // veri henüz yok → sonra tekrar dene (3 gün)
@@ -63,6 +63,8 @@ export function fmtIdeaReport(books, now = Date.now()) {
     const ideas = (books?.[k]?.ideas || []).filter(it => !src || (it.src || "fast") === src);
     L.push(fmtIdeaStats(`${lab} · 7 gün`, ideaStats(ideas, d7)), fmtIdeaStats(`${lab} · 30 gün`, ideaStats(ideas, d30)));
   }
+  { const a = (books?.fast?.ideas || []).filter(it => it.amb && it.ts >= d30).length;
+    if (a) L.push(`🔁 30 günde ${a} fikirde hedef ve stop aynı 1 dk mumda → stop sayıldı (ihtiyatlı)`); }
   for (const p of pausedList(books?.fast?.ideas, now)) L.push(`⏸ ${keyLabel(p.key)} durdurulmuş: son 10 fikir ${p.s10}R · ${p.daysLeft} gün sonra küçük adetle yeniden denenir`);
   L.push("ℹ Başabaş: 1:2 risk/ödülde isabet ≥ %34 ve ortalama > 0R olmalı. Opsiyonda zaman kaybı ve spread bu sonucu düşürür.");
   return L.join("\n");

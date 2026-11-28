@@ -48,6 +48,7 @@ import { pmMovers, fmtPmMovers, fmtEod } from "./daily.mjs";
 import { paperTrips } from "./optpaper.mjs";
 import { closeTsOf, nyTs } from "../data/market.mjs";
 import { weakQuality } from "./edge.mjs";
+import { HOLD_FILE, HOLD, holdUniverse, indicators, holdPick, pickList, fmtHold, weekKey } from "./hold.mjs";
 import { pickTenor } from "./morning.mjs";
 import { earningsOn, reportDates } from "../data/nasdaq.mjs";
 // Haftalık rapor eki: sanal opsiyon hesabı (gerçek dolumlar, 7 gün) + eşik ayarı durumu
@@ -78,6 +79,32 @@ async function reboundStep(st, today, all) {
   const txt = fmtRebound(out);
   if (txt) await sendTG(txt);
   console.log(`[Dönüş] aday ${cands.length} · kaliteli ${out.length}`);
+}
+// 1–2 AY TUTUŞ (haftada 1, haftanın ilk işlem günü 15:30–15:50 NY): yalnız research/hold.mjs testi geçtiyse (abd_hold.json use)
+async function holdStep(st, today) {
+  const f = await loadFiles([HOLD_FILE]).catch(() => READ_FAILED);
+  if (f === READ_FAILED) return;                                             // okunamadı → sonraki taramada tekrar
+  const cfg = f[HOLD_FILE];
+  st.holdWk = weekKey(today);
+  if (!cfg?.use || !HOLD.VARIANTS.includes(cfg.variant)) { console.log("[Tutuş] ölçümde geçmedi ya da sonuç yok → liste yok"); return; }
+  const spy = dailyCache.get("SPY") || await fetchDaily("SPY").catch(() => []);
+  if (spy.length < 130) return;
+  const ir120 = spy.at(-1).close / spy.at(-121).close - 1, cands = [];
+  for (const s of holdUniverse(UNI)) {
+    const rows = dailyCache.get(s) || await fetchDaily(s).catch(() => null);
+    if (!rows || rows.length < 260) continue;
+    const p = holdPick(cfg.variant, rows, indicators(rows), rows.length - 1, ir120);
+    if (p) cands.push({ sym: s, sec: UNI.meta?.[s]?.sec, price: rows.at(-1).close, ...p });
+  }
+  const list = pickList(cands, HOLD.N_LIVE), r = await riskFreeRate().catch(() => 0.04);
+  for (const x of list) {                                                    // ~2 ay vadeli, delta ≈ 0.5 call (yalnız ALIM)
+    const ch = await loadChain(x.sym, r, { minDte: 40, maxDte: 75, targets: [60] }).catch(() => null), t = pickTenor(ch, 40, 75, "C", 0.5);
+    if (t) x.contract = `${t.expD.slice(8, 10)}.${t.expD.slice(5, 7)} ${t.c.K}C ~$${t.prem.toFixed(2)}`;
+  }
+  const txt = fmtHold(list, cfg);
+  st.holdLast = txt ? { d: today, txt } : null;
+  if (txt) await sendTG(txt);
+  console.log(`[Tutuş] ${cfg.variant}: aday ${cands.length} · liste ${list.length}`);
 }
 // ---------- Kullanıcı komutları: ayarlar, hesap, pozisyonlar ----------
 export async function userCommand(st, cmd, args) {
@@ -118,6 +145,7 @@ export async function userCommand(st, cmd, args) {
     await sendTG(`✔ ${p.sym} ${p.K}${p.type} takipten çıkarıldı${sell > 0 ? ` · sonuç ${sell >= p.px ? "+" : "−"}%${Math.abs(Math.round((sell / p.px - 1) * 100))} (${sell >= p.px ? "+" : "−"}$${Math.abs(Math.round((sell - p.px) * 100 * p.qty))})` : ""}.`);
     return true;
   }
+  if (cmd === "/tutus") { await sendTG(st.holdLast?.txt ? `${st.holdLast.txt}\n(liste tarihi ${st.holdLast.d})` : "📈 Tutuş listesi henüz yok (haftanın ilk işlem günü ~15:30 NY gelir; yalnız ölçüm geçtiyse)."); return true; }
   if (cmd === "/pozisyonlarim") { await sendTG(fmtPositions(st.mypos, await myPosValues(st.mypos))); return true; }
   return false;
 }
@@ -313,6 +341,7 @@ const HELP = [
   "/veri — canlı veri denetimi: her kaynağın yaşı ve uyumu (Alpaca, Yahoo, opsiyon zinciri, VIX)",
   "/aldim SPY 728C 4.50 — pozisyonunu takibe al (vade gg.aa, adet, hedef X, stop Y isteğe bağlı) · /sattim SPY 728C · /pozisyonlarim",
   "/ayarlar — hangi mesajlar gelsin (aç/kapat) · /hesap 25000 1 — hesap ve işlem başı risk % → mesajlarda kontrat sayısı",
+  "/tutus — 1–2 ay tutuş listesi (momentum liderleri; haftada 1 otomatik gelir)",
   "/fikirkarne —15 dk SPY/QQQ fikirleri ve ani hareket alarmlarının gerçekleşen sonuçları",
   "/durum — bot durumu",
   "/yardim — bu liste",
@@ -684,6 +713,11 @@ export async function main() {
   // Ölçüm (research/rebound.mjs, 2015 sonrası 100 likit hisse): ort. +%1.04 / 3.8 gün, kazanan %71 (rastgele gün +%0.27 / 2.5 gün)
   if (st.rebDay !== today && mins >= 930 && mins < 950 && isOn(st.prefs, "donus")) {
     await reboundStep(st, today, all).catch(e => console.error("[Dönüş]", e?.message || e));
+  }
+
+  // --- 1–2 AY TUTUŞ LİSTESİ (haftada 1) ---
+  if (st.holdWk !== weekKey(today) && mins >= 930 && mins < 950 && isOn(st.prefs, "tutus")) {
+    await holdStep(st, today).catch(e => console.error("[Tutuş]", e?.message || e));
   }
 
   // --- BİLANÇO STRADDLE: giriş 15:00–15:50 NY (günde 1), çıkış tepki günü 10:00 NY sonrası ---

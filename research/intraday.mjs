@@ -74,6 +74,7 @@ async function main() {
           last[key] = i;
           recs.push({ train: di < split, name: c.name, dir: c.dir, part: partOf(mins), dtg: dtGroup(dt, c.dir),
             r30: outcomeR(bars, i, c.dir, c.stop, 6), r60: outcomeR(bars, i, c.dir, c.stop, 12),
+            r30b: outcomeR(bars, i, c.dir, c.stop, 6, 2, true), r60b: outcomeR(bars, i, c.dir, c.stop, 12, 2, true),
             x: features(bars, f, i, mins, c, { br, mb, pdc: lv.pdc, dATR, dt }) });
         }
       }
@@ -114,12 +115,20 @@ async function main() {
     : "CANLIYA ALINAN: yok — hiçbir kurulum hem eğitimde hem testte geçmedi.");
   console.log(model ? `MODEL: test AUC ${model.auc} (0.5 = yazı-tura) · eşik ${model.thr ?? "—"} · eşik üstü test ort ${model.testAvgR ?? "—"}R (n ${model.testN}) → ${model.use ? "KULLANILIYOR" : "KULLANILMIYOR (yetersiz ayırt etme)"}` : "MODEL: veri yetersiz.");
   if (model?.use) console.log("Ağırlıklar: " + FEAT_NAMES.map((n, j) => `${n} ${model.w[j] >= 0 ? "+" : ""}${model.w[j]}`).join(" · "));
+  // VARSAYIM TESTİ: aynı 5 dk mumda hedef + stop → STOP sayılıyor (ihtiyatlı). Ters varsayımla (HEDEF) canlıya alınanların test ortalaması
+  const sub = a => recs.filter(r => !r.train && r.name === a.name && r.dir === a.dir && (a.part === "tümü" || r.part === a.part) && (a.dtg === "tümü" || r.dtg === a.dtg));
+  const pool = slim.length ? slim.flatMap(a => sub(a).map(r => [a.hor === 30 ? r.r30 : r.r60, a.hor === 30 ? r.r30b : r.r60b])) : recs.map(r => [r.r30, r.r30b]);
+  const amb = pool.filter(([x, y]) => x !== y).length, ambShare = pool.length ? amb / pool.length : 0;
+  const mA = pool.length ? pool.reduce((s, [x]) => s + x, 0) / pool.length : 0, mB = pool.length ? pool.reduce((s, [, y]) => s + y, 0) / pool.length : 0;
+  const robust = ambShare <= 0.1 && mB - mA <= 0.15;
+  const ambLine = `🔁 Varsayım testi: ${slim.length ? "canlıdaki fikirlerin" : "tüm fikirlerin"} %${Math.round(ambShare * 100)}'inde hedef ve stop aynı mumda → stop sayıldı (ort ${mA >= 0 ? "+" : ""}${mA.toFixed(2)}R); hedef sayılsaydı ${mB >= 0 ? "+" : ""}${mB.toFixed(2)}R → ${robust ? "sonuç bu varsayıma bağlı değil" : "sonuç bu varsayıma DUYARLI, ihtiyatlı oku"}`;
+  console.log(ambLine);
   // TELEGRAM ÖZETİ (kısa): yalnız canlıya alınanlar + model kararı
   const when = a => [a.part !== "tümü" ? a.part : null, a.dtg !== "tümü" ? { lehte: "trend yönünde", aleyhte: "trende karşı", yatay: "yatay günde" }[a.dtg] : null].filter(Boolean).join(", ");
   console.log(["ÖZET", `🧪 Gün içi test (SPY/QQQ, ${days.length} gün; son ${days.length - split} gün hiç görülmeden sınandı)`,
     ...(slim.length ? slim.map(a => `✅ ${a.dir === "C" ? "CALL" : "PUT"} — ${SETUP_LABEL[a.name]?.[a.dir] || a.name}${when(a) ? ` (${when(a)})` : ""}: isabet %${Math.round((a.w || 0) * 100)} · işlem başı ${a.m >= 0 ? "+" : ""}${a.m}R → canlıda`)
       : ["❌ Hiçbir kurulum testi geçmedi → kurulum mesajı gönderilmeyecek."]),
-    model ? (model.use ? `🤖 Olasılık modeli işe yarıyor → fikirler süzülecek` : "🤖 Olasılık modeli işe yaramadı → kullanılmıyor") : null].filter(Boolean).join("\n"));
+    model ? (model.use ? `🤖 Olasılık modeli işe yarıyor → fikirler süzülecek` : "🤖 Olasılık modeli işe yaramadı → kullanılmıyor") : null, pool.length ? ambLine : null].filter(Boolean).join("\n"));
   if (days.length >= 120 && gistEnabled() && process.env.INTRA_SAVE !== "0")
     console.log((await saveFiles({ [SETUPS_FILE]: { d: new Date().toISOString().slice(0, 10), src, days: days.length, allow: slim, model } })) ? "Liste ve model Gist'e yazıldı." : "⚠ Liste yazılamadı.");
 }

@@ -98,13 +98,15 @@ export function breadthSeries(tsList, secBars) {
 
 // Sonuç (araştırma + karne ile aynı mantık): giriş = mum kapanışı, sonraki mumlarda önce STOP (aynı mumda ikisi = STOP),
 // sonra HEDEF (2R), ufuk dolarsa son kapanış. Dönüş: R katı
-export function outcomeR(bars, i, dir, stop, horizonBars, rr = 2) {
+// tgtFirst: aynı mumda hem stop hem hedef değerse HEDEF say (varsayılan: STOP, ihtiyatlı) → varsayım duyarlılık testi
+export function outcomeR(bars, i, dir, stop, horizonBars, rr = 2, tgtFirst = false) {
   const S = bars[i].close, R = Math.abs(S - stop), up = dir === "C", tgt = up ? S + rr * R : S - rr * R;
   if (!(R > 0)) return 0;
   for (let k = i + 1; k <= Math.min(bars.length - 1, i + horizonBars); k++) {
-    const x = bars[k];
-    if (up ? x.low <= stop : x.high >= stop) return -1;
-    if (up ? x.high >= tgt : x.low <= tgt) return rr;
+    const x = bars[k], hs = up ? x.low <= stop : x.high >= stop, ht = up ? x.high >= tgt : x.low <= tgt;
+    if (hs && ht) return tgtFirst ? rr : -1;
+    if (hs) return -1;
+    if (ht) return rr;
   }
   const last = bars[Math.min(bars.length - 1, i + horizonBars)].close;
   return ((up ? 1 : -1) * (last - S)) / R;
