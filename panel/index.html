@@ -128,6 +128,7 @@ function render(p) {
   $("#karne").innerHTML = `<h2>Gün içi fikir karnesi</h2>` + (p.karne ? `<div class="card"><div class="txt">${esc(p.karne)}</div></div>` : `<div class="empty">Henüz yok.</div>`) +
     (pz.length ? `<h2>Durdurulan türler</h2><div class="card">${pz.map(x => `<div class="row"><span class="sym">${esc(x.key.split("|").slice(1).join(" "))}</span><span>son 10: ${x.s10}R</span><span class="sub" style="grid-column:auto">${x.daysLeft} gün</span></div>`).join("")}</div>` : "") +
     block(feed, "gunsonu", "Gün sonu", "Kapanıştan sonra gelir.") +
+    (feed.some(x => x.cat === "karne") ? `<h2>Durdurma bildirimleri</h2>` + feed.filter(x => x.cat === "karne").slice(-5).reverse().map(x => card(x)).join("") : "") +
     `<p class="note">Telegram'daki bot mesajlarının aynısı · yalnız piyasa fikirleri (hesap ve pozisyon bilgisi yok)</p>`;
 }
 
