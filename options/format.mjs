@@ -61,7 +61,7 @@ export function fmtAnalysis(res) {
     L.push(`\nEn iyi ${res.ideas.length} yapı (${res.considered} aday arasından):\n`);
     res.ideas.forEach((i, k) => L.push(fmtIdea(i, res.sym, k + 1), ""));
   } else L.push("", `⏸ ${res.note}`);
-  L.push("ℹ Gecikmeli/yaklaşık zincir verisi. Emir öncesi canlı fiyatı kontrol et. ⚠ Yatırım tavsiyesi değildir.");
+  L.push("ℹ Emir öncesi canlı fiyatı kontrol et.");
   return L.join("\n");
 }
 
@@ -69,6 +69,6 @@ export function fmtDailyIdeas(list, header) {
   const L = [header, ""];
   list.forEach((x, k) => { L.push(fmtIdea(x.idea, x.sym, k + 1), `Neden: ${x.reasons.join(" · ")}`, ""); });
   if (!list.length) L.push("Bugün filtreleri geçen pozitif beklentili opsiyon yapısı yok. (Beklemek de bir pozisyondur.)", "");
-  L.push("ℹ Kâr olasılığı/EV: kalın kuyruklu dağılım + gerçekleşen oynaklık + spread kayması. ⚠ Yatırım tavsiyesi değildir.");
+  L.push("ℹ Kâr olasılığı/EV: kalın kuyruklu dağılım + gerçekleşen oynaklık + spread kayması.");
   return L.join("\n");
 }

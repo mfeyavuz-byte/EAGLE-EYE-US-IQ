@@ -243,7 +243,7 @@ const FORCE = process.env.FORCE === "1";
 const ETFS = ["SPY", "QQQ", "IWM"];                       // nötr (iron condor) fikirleri için endeks ETF'leri
 const usd = v => (v == null ? "—" : "$" + (+v).toLocaleString("en-US", { maximumFractionDigits: 2 }));
 const sgn = v => (v >= 0 ? "+" : "") + v;
-const DISCLAIMER = "⚠ Yatırım tavsiyesi değildir.";
+const DISCLAIMER = "";   // kullanıcı isteği: mesajlarda uyarı metni yok
 
 // Günlük üst sınır: filtreyi geçenlerden yalnızca en kaliteli ilk N yeni sinyal gönderilir (gürültü freni).
 export const DAY_CAP = { AL: +(process.env.MAX_AL_DAY || 10), SAT: +(process.env.MAX_SAT_DAY || 6) };
@@ -322,7 +322,7 @@ export function fmtDetail(a, newsList = []) {
     L.push("", "📰 Son haberler:");
     for (const n of newsList) L.push(`• ${n.t ? n.t.slice(5, 10).split("-").reverse().join(".") + " " : ""}${n.headline}${n.source ? ` (${n.source})` : ""}`);
   }
-  L.push("", "Opsiyon yapıları için: /opsiyon " + a.sym, DISCLAIMER);
+  L.push("", "Opsiyon yapıları için: /opsiyon " + a.sym);
   return L.join("\n");
 }
 
@@ -745,24 +745,21 @@ export async function main() {
   const fresh = pickFresh(signals, st.sent);
   const held = signals.filter(x => st.sent.map[x.sym] !== x.signal).length;   // kota yüzünden bekleyenler
   const firstOfDay = st.lastHeaderDay !== today;
-  if ((fresh.length || firstOfDay) && isOn(st.prefs, "spot")) {
+  if (fresh.length && isOn(st.prefs, "spot")) {                         // yeni sinyal yoksa mesaj yok
     // Haber duygusu (son 48 saat başlıkları) — yalnız BİLGİ etiketi, kurala girmez (research/news.mjs ölçümüne kadar)
     if (alpacaEnabled()) for (const s of fresh) {
       const t = newsTag(newsSentiment(await news(s.sym, 20).catch(() => []), Date.now() - 2 * 864e5));
       if (t) s.edgeTag = s.edgeTag ? `${s.edgeTag} · ${t}` : t;
     }
     const al = fresh.filter(s => s.signal === "AL"), sat = fresh.filter(s => s.signal === "SAT");
-    let m = `🇺🇸 ABD SPOT SİNYALLERİ${firstOfDay ? " — seans açılışı" : " — yeni"}\n${fmtTR()} (TR) · SPY 60g ${sgn(spy.ret60)}%\n` +
-      (firstOfDay ? `AL = momentum lideri geri çekilmede (ufuk ~1 ay; stop/hedef/21 gün dolunca ÇIKIŞ mesajı gelir) · SAT = teyitli düşüş + zayıf momentum\nBoyut: stop'a kadar portföyün %${RISK_SPOT * 100}'i riske, tek hisse en çok %${MAX_POS * 100} · sektör başına en çok ${SEC_CAP}\n` : "");
+    let m = `🇺🇸 HİSSE SİNYALLERİ · SPY 60g ${sgn(spy.ret60)}%\n`;
     // Kesme YOK: liste zaten günlük kotayla sınırlı; uzun mesaj sendTG'de satır sınırından parçalanır.
     if (al.length) m += `\nAL (${al.length})\n` + al.map(fmtSignal).join("\n") + "\n";
     if (sat.length) m += `\nSAT (${sat.length})\n` + sat.map(fmtSignal).join("\n") + "\n";
-    if (!al.length && !sat.length) m += "\nFiltreyi geçen yeni sinyal yok.\n";
     if (analyzed === 0) m += "\n⚠ Hiçbir sembol analiz edilemedi — veri kaynağı sorunu olabilir.\n";
-    if (held) m += `\n(+${held} sinyal daha filtreyi geçti; günlük kota AL ${DAY_CAP.AL} / SAT ${DAY_CAP.SAT}, sektör başına ${SEC_CAP} — liste: /sinyaller)\n`;
+    if (held) m += `\n+${held} sinyal daha: /sinyaller\n`;
     const ai = await aiComments(fresh.map(x => aiItem(x, { sector: UNI.meta?.[x.sym]?.sec })));
     if (Object.keys(ai).length) m += `\n🧠 Yorum (yapay zekâ · ${AI_MODEL} · yalnız yukarıdaki metriklere dayanır)\n` + Object.entries(ai).map(([k, v]) => `• ${k}: ${v}`).join("\n") + "\n";
-    m += `\n${analyzed}/${SYMS.length} hisse tarandı · SAT = spotta çık/girme · ${DISCLAIMER}`;
     const btn = fresh.slice(0, 16).map(s => ({ text: `${s.signal === "AL" ? "🟢" : "🔴"} ${s.sym}`, data: `/hisse ${s.sym}` }));
     if (await sendTG(m, { buttons: Array.from({ length: Math.ceil(btn.length / 4) }, (_, k) => btn.slice(k * 4, k * 4 + 4)) })) {
       st.lastHeaderDay = today;
@@ -784,7 +781,7 @@ export async function main() {
   // --- TAKİP LİSTESİ uyarıları ---
   if (Object.keys(st.watch || {}).length) {
     const alerts = checkWatch(st, new Map(all.map(a => [a.sym, a])), today);
-    if (alerts.length) await sendTG("👁 TAKİP UYARISI\n\n" + alerts.join("\n") + `\n\n${DISCLAIMER}`);
+    if (alerts.length) await sendTG("👁 TAKİP UYARISI\n\n" + alerts.join("\n"));
   }
 
   // --- MODEL PORTFÖY (sanal): AL seçimleri → 15 slot, eşit ağırlık; çıkış stop/hedef/21 gün; günlük özsermaye ---
@@ -829,7 +826,7 @@ export async function main() {
   if (st.spotBook?.length) {
     const px = new Map(all.map(a => [a.sym, a.price]));
     const exits = checkExits(st.spotBook, today, s => px.get(s), spyPx);
-    if (exits.length && !(await sendTG(fmtExits(exits) + `\n\nℹ Fiyatlar tarama anındaki son fiyattır. ${DISCLAIMER}`))) {
+    if (exits.length && !(await sendTG(fmtExits(exits)))) {
       exits.forEach(b => { delete b.closed; });                       // gönderilemedi → sonraki run'da tekrar
     }
   }
@@ -909,7 +906,7 @@ export async function main() {
         ? loadChain(sym, r, { minDte: 0, maxDte: 400, targets: [Math.max(0, (expTs - Date.now() / 1e3) / 86400)] })
         : loadChain(sym, r, { minDte: ETF_OPT.DTE, maxDte: ETF_OPT.DTE + 30, targets: [ETF_OPT.DTE + 2] }),
     });
-    for (const l of lines) await sendTG(l + `\n\n${DISCLAIMER}`, { buttons: [[{ text: "⚡ SPY/QQQ durumu", data: "/etf" }]] });
+    for (const l of lines) await sendTG(l, { buttons: [[{ text: "⚡ SPY/QQQ durumu", data: "/etf" }]] });
     st.om ||= initOptModel(today);                                       // aylık kol: bugün açılan ETF fırsatları
     for (const p of Object.values(st.etf?.pos || {})) if (p.d === today && !p.omq) { queue(st.om, today, "M", p.sym, p.type || "C", `ETF ${p.kind || "rsi"}`); p.omq = true; }
   }

@@ -95,7 +95,7 @@ export function fmtModel(m, title, fromD, priceOf = () => undefined, toD = null)
     const px = priceOf(sym) ?? p.last ?? p.px;
     L.push(`• ${sym} ${p.d} $${p.px} → $${(+px).toFixed(2)} (${pc(px * p.sh / p.cost - 1)})`);
   }
-  L.push("ℹ Sanal portföy: AL seçimleri, eşit ağırlık, en çok 15 pozisyon, stop/hedef/21 gün çıkış, %0.05 maliyet. ⚠ Yatırım tavsiyesi değildir.");
+  L.push("ℹ Sanal portföy: AL seçimleri, eşit ağırlık, en çok 15 pozisyon, stop/hedef/21 gün çıkış, %0.05 maliyet.");
   return L.join("\n");
 }
 

@@ -123,6 +123,6 @@ export function fmtValue(v, stats, title) {
   const L = [title];
   if (stats) L.push(`Dönem ${stats.from} → ${stats.to} · getiri ${pc(stats.ret)} · SPY ${pc(stats.spyRet)} · fark ${stats.spyRet != null ? pc(stats.ret - stats.spyRet) : "—"} · en büyük düşüş ${stats.mdd < 0 ? pc(stats.mdd) : "%0.00"}`);
   L.push(`Özsermaye $${Math.round(stats?.eq ?? VCFG.CAP).toLocaleString("en-US")} · son dengeleme ${v.lastRebal || "—"} · liste: ${v.list.join(", ") || "—"}`);
-  L.push("ℹ Sektörüne göre ucuz (ana ölçü ileri F/K) + kârlı + borcu makul hisseler, eşit ağırlık, aylık dengeleme. Geriye dönük test edilemedi (geçmiş temel veri ücretsiz değil) → canlı karne. ⚠ Yatırım tavsiyesi değildir.");
+  L.push("ℹ Sektörüne göre ucuz (ana ölçü ileri F/K) + kârlı + borcu makul hisseler, eşit ağırlık, aylık dengeleme. Geriye dönük test edilemedi (geçmiş temel veri ücretsiz değil) → canlı karne.");
   return L.join("\n");
 }
