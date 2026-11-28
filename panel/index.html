@@ -76,7 +76,7 @@ const ago = ts => { const m = Math.round((Date.now() - ts) / 60e3); return m < 1
 const pct = x => (x == null ? "—" : `${x >= 0 ? "+" : "−"}%${Math.abs(x * 100).toFixed(2)}`);
 const LAB = { plan: "15 dk plan", saatlik: "Saatlik liste", fikir: "Fikir", cikis: "Çıkış", tutus: "1–2 ay tutuş", donus: "Aşırı satım dönüşü",
   hisse: "Hisse sinyalleri", premarket: "Açılış öncesi", bilanco: "Bilanço", etf: "SPY/QQQ kısa vade", sabah: "Sabah", veri: "Veri denetimi",
-  gunsonu: "Gün sonu", karne: "Karne" };
+  gunsonu: "Gün sonu", karne: "Karne", ta: "Teknik formasyonlar", wma: "200 haftalık ortalama", opsiyon: "Opsiyon fikirleri", deger: "Değer portföyü" };
 
 const card = (x, title) => `<div class="card"><div class="t"><span>${esc(title || LAB[x.cat] || x.cat)}</span><span>${trTime(x.ts)} TR · ${ago(x.ts)}</span></div><div class="txt">${esc(x.text)}</div></div>`;
 const latest = (feed, cat) => [...feed].reverse().find(x => x.cat === cat);
@@ -95,12 +95,16 @@ function render(p) {
     `<h2>Bugünkü fikirler ve çıkışlar</h2>` + (ideas.length ? ideas.map(x => card(x)).join("") : `<div class="empty">Bugün henüz fikir yok.</div>`) +
     block(feed, "saatlik", "Saatlik liste", "Saatlik liste seans içinde gelir (TR 18:30 sonrası).");
   // HİSSELER
-  $("#stocks").innerHTML = block(feed, "tutus", "1–2 ay tutuş", "Haftanın ilk işlem günü ~22:30 TR gelir (yalnız test geçtiyse).") +
+  $("#stocks").innerHTML = block(feed, "ta", "Teknik formasyonlar (Elliott · trend kırılımı · dipten dönüş)", "Uygun formasyon çıkınca her gün ~22:30 TR gelir.") +
+    block(feed, "wma", "200 haftalık ortalama", "Ortalamaya gelen ya da kıran hisse çıkınca gelir (kırılım: haftalık kapanışta).") +
+    block(feed, "opsiyon", "Opsiyon fikirleri", "Seans içinde gelir.") +
+    block(feed, "tutus", "1–2 ay tutuş", "Haftanın ilk işlem günü ~22:30 TR gelir (yalnız test geçtiyse).") +
     block(feed, "donus", "Aşırı satım dönüşü", "Uygun aday çıkınca ~22:30 TR gelir.") +
     block(feed, "hisse", "Hisse sinyalleri", "Yeni hisse sinyali yok.") +
     block(feed, "premarket", "Açılış öncesi hareketliler", "Seans öncesi ~17:00 TR gelir.") +
     block(feed, "bilanco", "Bilanço", "Bilanço fırsatı yok.") +
-    block(feed, "etf", "SPY/QQQ kısa vade", "Sinyal yok.");
+    block(feed, "etf", "SPY/QQQ kısa vade", "Sinyal yok.") +
+    block(feed, "deger", "Değer portföyü (aylık)", "Ay başında dengelenir.");
   // PİYASA
   const it = p.internals, ld = p.lead;
   let mk = `<h2>Piyasa içi</h2>`;

@@ -53,6 +53,7 @@ jobs:
           out="$(node bot/checksetups.mjs)"; echo "$out"
           case "$out" in *STALE:setups*) gh workflow run intraday-research.yml --repo "$GITHUB_REPOSITORY" --ref main && echo "Kurulum araştırması başlatıldı.";; esac
           case "$out" in *STALE:hold*) gh workflow run hold-research.yml --repo "$GITHUB_REPOSITORY" --ref main && echo "Tutuş testi başlatıldı.";; esac
+          case "$out" in *STALE:ta*) gh workflow run ta-research.yml --repo "$GITHUB_REPOSITORY" --ref main && echo "Formasyon testi başlatıldı.";; esac
       - name: Kesintisiz döngü (tarama 10 dk · SPY/QQQ fikri 15 dk · ~5,5 saat)
         id: loop
         env:

@@ -49,6 +49,8 @@ import { paperTrips } from "./optpaper.mjs";
 import { closeTsOf, nyTs } from "../data/market.mjs";
 import { weakQuality } from "./edge.mjs";
 import { HOLD_FILE, HOLD, holdUniverse, indicators, holdPick, pickList, fmtHold, weekKey } from "./hold.mjs";
+import { TA_FILE, prep, taSignals, wmaArr, wmaEvent, fmtTa, fmtWma } from "./ta.mjs";
+import { fetchChart } from "../data/yahoo.mjs";
 import { pickTenor } from "./morning.mjs";
 import { earningsOn, reportDates } from "../data/nasdaq.mjs";
 // Haftalık rapor eki: sanal opsiyon hesabı (gerçek dolumlar, 7 gün) + eşik ayarı durumu
@@ -106,6 +108,55 @@ async function holdStep(st, today) {
   if (txt) await sendTG(txt, { panel: "tutus" });
   console.log(`[Tutuş] ${cfg.variant}: aday ${cands.length} · liste ${list.length}`);
 }
+// TEKNİK FORMASYONLAR + 200 HAFTALIK ORTALAMA (günde 1, 15:30–15:50 NY — kapanışa yakın; araştırmadaki "kapanışta gir" ile uyumlu)
+// Formasyonlar: yalnız research/ta.mjs testini geçenler (abd_ta.json allow). 200 haftalık: kullanıcı isteğiyle HER ZAMAN net öneri +
+// mesajda geçmiş ölçüm. Kırılım (yukarı/aşağı) yalnız haftanın son işlem gününde (haftalık kapanış teyidi); ortalamaya geliş her gün.
+const WMA_EXTRA = ["SPY", "QQQ", "IWM", "DIA", "GLD", "SLV"];
+async function optTxt(sym, dir, r, lo, hi, tgt) {
+  const ch = await loadChain(sym, r, { minDte: lo, maxDte: hi, targets: [tgt] }).catch(() => null), t = pickTenor(ch, lo, hi, dir, 0.5);
+  return t ? `${t.expD.slice(8, 10)}.${t.expD.slice(5, 7)} ${t.c.K}${dir} ~$${t.prem.toFixed(2)}` : null;
+}
+async function taStep(st, today, wd) {
+  const f = await loadFiles([TA_FILE]).catch(() => READ_FAILED);
+  if (f === READ_FAILED) return;
+  st.taDay = today;
+  const cfg = f[TA_FILE] || {}, allow = cfg.allow || [], r = await riskFreeRate().catch(() => 0.04), uni = holdUniverse(UNI);
+  if (isOn(st.prefs, "formasyon") && allow.length) {
+    const pats = [];
+    for (const s of uni) {
+      const rows = dailyCache.get(s);
+      if (!rows || rows.length < 260 || rows.at(-1).close < 10) continue;
+      for (const sg of taSignals(rows, prep(rows), rows.length - 1)) {
+        const a = allow.find(x => x.name === sg.name && x.dir === sg.dir && (x.tf === "tümü" || sg.trend === (sg.dir === "C" ? 1 : -1)));
+        if (a) pats.push({ sym: s, ...sg, a });
+      }
+    }
+    const top = pats.sort((x, y) => y.a.m - x.a.m).slice(0, 8);
+    for (const x of top) x.contract = await optTxt(x.sym, x.dir, r, 25, 50, 35);
+    const txt = fmtTa(top);
+    if (txt) await sendTG(txt, { panel: "ta" });
+    console.log(`[Formasyon] aday ${pats.length} · gönderilen ${top.length}`);
+  }
+  if (isOn(st.prefs, "wma200")) {
+    const lastDay = wd === "Fri" || (wd === "Thu" && (await isTradingDay(nextTradingDayIso(today)).catch(() => null)) === false);   // haftanın son işlem günü
+    const ev = [], sent = (st.wmaSent ||= {});
+    for (const s of [...WMA_EXTRA, ...uni]) {
+      const w = await fetchChart(s, "1wk", "5y").catch(() => null);
+      if (!w || w.length < 210) continue;
+      const m = wmaArr(w), e = wmaEvent(w, m, w.length - 1);
+      if (!e || ((e.ev === "UP" || e.ev === "DN") && !lastDay)) continue;
+      const k = `${s}|${e.ev}`;
+      if (sent[k] && Date.parse(today) - Date.parse(sent[k]) < 28 * 864e5) continue;          // aynı olay 4 haftada 1 kez
+      ev.push({ sym: s, px: w.at(-1).close, ...e });
+    }
+    for (const x of ev.slice(0, 10)) x.contract = await optTxt(x.sym, x.dir, r, 50, 110, 75);
+    const txt = fmtWma(ev.slice(0, 10), cfg.wma);
+    if (txt && await sendTG(txt, { panel: "wma" })) for (const x of ev.slice(0, 10)) sent[`${x.sym}|${x.ev}`] = today;
+    for (const [k, d] of Object.entries(sent)) if (Date.parse(today) - Date.parse(d) > 60 * 864e5) delete sent[k];
+    console.log(`[200 WMA] olay ${ev.length}`);
+  }
+}
+const nextTradingDayIso = d => { const t = new Date(d + "T12:00:00Z"); t.setUTCDate(t.getUTCDate() + 1); return t.toISOString().slice(0, 10); };
 // ---------- Kullanıcı komutları: ayarlar, hesap, pozisyonlar ----------
 export async function userCommand(st, cmd, args) {
   if (cmd === "/ayarlar") {
@@ -214,7 +265,7 @@ async function earningsStep(st, today, mins) {
     if (val == null && x.reactD === today) continue;                          // kotasyon yok → sonraki çalıştırmada tekrar
     if (x.paper) { await paperClose(x.occC).catch(() => null); await paperClose(x.occP).catch(() => null); }
     const ret = val != null ? val / x.cost - 1 : null;
-    if (await sendTG(`🎯 KAPAT: ${x.sym} ${x.K}C + ${x.K}P — iki bacağı sat · ~$${val != null ? val.toFixed(2) : "—"} (${ret != null ? (ret >= 0 ? "+" : "") + (ret * 100).toFixed(0) + "%" : "kotasyon yok"})${x.paper ? " 🧾" : ""}`)) {
+    if (await sendTG(`🎯 KAPAT: ${x.sym} ${x.K}C + ${x.K}P — iki bacağı sat · ~$${val != null ? val.toFixed(2) : "—"} (${ret != null ? (ret >= 0 ? "+" : "") + (ret * 100).toFixed(0) + "%" : "kotasyon yok"})${x.paper ? " 🧾" : ""}`, { panel: "bilanco" })) {
       st.earn.open.splice(i, 1);
       if (ret != null) st.earn.closed.push({ sym: x.sym, d: x.d, ret: +ret.toFixed(4), ratio: x.ratio });
       if (st.earn.closed.length > 300) st.earn.closed.splice(0, st.earn.closed.length - 300);
@@ -341,6 +392,7 @@ const HELP = [
   "/veri — canlı veri denetimi: her kaynağın yaşı ve uyumu (Alpaca, Yahoo, opsiyon zinciri, VIX)",
   "/aldim SPY 728C 4.50 — pozisyonunu takibe al (vade gg.aa, adet, hedef X, stop Y isteğe bağlı) · /sattim SPY 728C · /pozisyonlarim",
   "/ayarlar — hangi mesajlar gelsin (aç/kapat) · /hesap 25000 1 — hesap ve işlem başı risk % → mesajlarda kontrat sayısı",
+  "Teknik formasyonlar (Elliott, düşen trend kırılımı, dipten dönüş) ve 200 haftalık ortalama uyarıları her gün ~22:30 TR otomatik gelir",
   "/tutus — 1–2 ay tutuş listesi (momentum liderleri; haftada 1 otomatik gelir)",
   "/fikirkarne —15 dk SPY/QQQ fikirleri ve ani hareket alarmlarının gerçekleşen sonuçları",
   "/durum — bot durumu",
@@ -370,7 +422,7 @@ async function valueStep(st, today, mins, all, spyPx) {
     const picks = pickValue(rankValue(rows));
     if (picks.length >= 5) {                                       // veri eksikse dengeleme ertelenir (yanlış liste kurulmaz)
       const { bought, sold } = rebalanceValue(v, today, picks, priceOf);
-      await sendTG(fmtValueTrades(bought, sold) + `\nAday ${cands.length} · kalite incelenen ${rows.length} · seçilen ${picks.length}`);
+      await sendTG(fmtValueTrades(bought, sold) + `\nAday ${cands.length} · kalite incelenen ${rows.length} · seçilen ${picks.length}`, { panel: "deger" });
     } else console.error(`[Değer] yetersiz veri (${picks.length} seçim) — dengeleme ertelendi`);
   }
   snapValue(v, today, priceOf, spyPx);
@@ -715,6 +767,11 @@ export async function main() {
     await reboundStep(st, today, all).catch(e => console.error("[Dönüş]", e?.message || e));
   }
 
+  // --- TEKNİK FORMASYONLAR + 200 HAFTALIK ORTALAMA (günde 1) ---
+  if (st.taDay !== today && mins >= 930 && mins < 950 && (isOn(st.prefs, "formasyon") || isOn(st.prefs, "wma200"))) {
+    await taStep(st, today, nyParts().wd).catch(e => console.error("[Formasyon]", e?.message || e));
+  }
+
   // --- 1–2 AY TUTUŞ LİSTESİ (haftada 1) ---
   if (st.holdWk !== weekKey(today) && mins >= 930 && mins < 950 && isOn(st.prefs, "tutus")) {
     await holdStep(st, today).catch(e => console.error("[Tutuş]", e?.message || e));
@@ -847,7 +904,7 @@ export async function main() {
     st.lastOptKey = optKey;
     addIdeas((st.optBook ||= []), ideas.slice(0, 6), today);          // karneye kaydet (vade sonunda ölçülecek)
     await sendTG(fmtDailyIdeas(ideas.slice(0, 6), `🎯 ABD OPSİYON FİKİRLERİ — ${slot === "PM" ? "öğleden sonra" : "sabah"}\n${fmtTR()} (TR) · ${scanned} dayanak incelendi · risksiz faiz %${(r * 100).toFixed(2)}`),
-      { buttons: [ideas.slice(0, 6).map(x => ({ text: `📊 ${x.sym}`, data: `/opsiyon ${x.sym}` }))] });
+      { panel: "opsiyon", buttons: [ideas.slice(0, 6).map(x => ({ text: `📊 ${x.sym}`, data: `/opsiyon ${x.sym}` }))] });
     console.log(`Opsiyon: ${ideas.length} fikir · ${((Date.now() - t1) / 1e3).toFixed(0)}s`);
   }
 
@@ -876,7 +933,7 @@ export async function main() {
     });
     console.log(`Karne değerleme: ${marked} açık fikir · ${closed.length} kural tetiklendi`);
     if (closed.length) await sendTG("📕 OPSİYON FİKRİ KAPAT — yönetim kuralı tetiklendi\n\n" + closed.map(fmtClosed).join("\n") +
-      "\n\nℹ Fiyat: bugünkü canlı alış/satış (orta ± %30 spread). Kendi pozisyonunu canlı fiyatla kontrol et.\n\n" + fmtStats(stats(st.optBook)));
+      "\n\nℹ Fiyat: bugünkü canlı alış/satış (orta ± %30 spread). Kendi pozisyonunu canlı fiyatla kontrol et.\n\n" + fmtStats(stats(st.optBook)), { panel: "opsiyon" });
   }
 
   // --- Spot karnesi için güncel fiyatlar (yalnız kayıtlı sinyallerin hisseleri) ---

@@ -1,0 +1,33 @@
+name: Teknik formasyon testi
+
+# Elliott (NEoWave kuralları), düşen trend kırılımı, dipten dönüş ve 200 haftalık ortalama 2015 sonrası walk-forward ölçülür.
+# Sonuç Gist'e (abd_ta.json) → canlı bot yalnız testi geçen formasyonları gönderir. Haftalık (Pazar) + sonuç yoksa/eskiyse zincir tetikler.
+on:
+  schedule:
+    - cron: "30 9 * * 0"
+  workflow_dispatch:
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+      - name: Araştırma
+        env:
+          GH_GIST_TOKEN: ${{ secrets.GH_GIST_TOKEN }}
+          GIST_ID: ${{ secrets.GIST_ID }}
+        run: |
+          set -o pipefail
+          node research/ta.mjs | tee out.txt
+          { echo '```'; sed -n '/^SONUÇ/,$p' out.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Sonucu Telegram'a gönder
+        if: always()
+        env:
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CHAT: ${{ secrets.TG_CHAT }}
+          BT_INFO: "Teknik formasyon testi · commit ${{ github.sha }}"
+        run: node options/send-report.mjs out.txt
