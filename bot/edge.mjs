@@ -76,7 +76,6 @@ export async function rankEdge(st, signals, { secOf, closesOf, qualityStats, tod
   return signals;
 }
 
-export const edgeLabel = a => a.edgeTag || null;
 export function fmtSectors(sec) {
   if (!sec?.top?.length) return "Sektör rotasyonu: veri yok.";
   const p = e => `${e} ${sec.r[e] >= 0 ? "+" : ""}${(sec.r[e] * 100).toFixed(1)}%`;

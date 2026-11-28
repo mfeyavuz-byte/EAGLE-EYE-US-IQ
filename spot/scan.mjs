@@ -40,7 +40,6 @@ export const CFG = {
 // Momentum eşikleri (son tam taramadan): tek sembol analizinde (/hisse, /opsiyon) sıra bunlarla yaklaşık bulunur.
 let MOM_CUTS = null;
 export const setMomCuts = c => { MOM_CUTS = c && isFinite(c.top) ? c : null; };
-export const getMomCuts = () => MOM_CUTS;
 
 // Sıralama: AL → 12 aylık momentum (araştırmada en iyi sıralayıcı); SAT → güven + trend + göreli zayıflık.
 export function quality(a) {

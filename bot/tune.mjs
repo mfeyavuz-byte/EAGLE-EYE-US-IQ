@@ -30,7 +30,7 @@ export function tuneAll(books, today) {
 export const tunedValue = (file, k) => (TUNE[k].cands.includes(file?.[k]) ? file[k] : TUNE[k].def);
 
 export function fmtTune(t) {
-  if (!t?.idx) return "🎚 Eşik ayarı: henüz hesaplanmadı.";
+  if (!t?.fast) return "🎚 Eşik ayarı: henüz hesaplanmadı.";
   return `🎚 Eşik ayarı (karneye göre, ${t.d}): ${TUNE.fast.lab} ≥ ${t.fast.value} (${t.fast.why})` +
     (t.fast.warn ? "\n⚠ Bazı fikir türleri karnede kaybettiriyor — eşik en seçiciye çekildi; sonuçlar düzelmezse o tür kapatılmalı." : "");
 }

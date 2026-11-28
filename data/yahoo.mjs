@@ -32,7 +32,6 @@ async function getSession() {
 // ORTAK FREN: 429 gelince TÜM istekler birlikte bekler (her istek ayrı ayrı yüklenip sınırı uzatmasın).
 // Çok fazla 429 birikirse bu run'da Yahoo'ya istek kesilir (hızlı başarısızlık) → bot çökmez, eksik veriyle devam eder.
 let coolUntil = 0, strikes = 0;
-export const yahooHealth = () => ({ strikes, cooling: Math.max(0, coolUntil - Date.now()) });
 
 async function yget(url, { auth = false, timeout = 10000, tries = 3 } = {}) {
   for (let a = 0; a < tries; a++) {

@@ -316,7 +316,6 @@ const FORCE = process.env.FORCE === "1";
 const ETFS = ["SPY", "QQQ", "IWM"];                       // nötr (iron condor) fikirleri için endeks ETF'leri
 const usd = v => (v == null ? "—" : "$" + (+v).toLocaleString("en-US", { maximumFractionDigits: 2 }));
 const sgn = v => (v >= 0 ? "+" : "") + v;
-const DISCLAIMER = "";   // kullanıcı isteği: mesajlarda uyarı metni yok
 
 // Günlük üst sınır: filtreyi geçenlerden yalnızca en kaliteli ilk N yeni sinyal gönderilir (gürültü freni).
 export const DAY_CAP = { AL: +(process.env.MAX_AL_DAY || 10), SAT: +(process.env.MAX_SAT_DAY || 6) };
@@ -562,7 +561,7 @@ export function weeklyReport(st, today, paperTxt = null, ideaTxt = null) {
     L.push("", "Açık opsiyon fikirleri:");
     for (const b of open) L.push(`• ${b.sym} ${b.code} ${b.legs.map(l => l.K + l.type).join("/")} (${b.exp}) · ${b.mark ? `güncel K/Z ${b.mark.pnl >= 0 ? "+" : ""}$${b.mark.pnl}` : "henüz değerlenmedi"}`);
   }
-  L.push("", "ℹ Spot getirileri sinyal yönünde (SAT için düşüş = +). SPY'a göre = sinyalin piyasaya katkısı. " + DISCLAIMER);
+  L.push("", "ℹ Spot getirileri sinyal yönünde (SAT için düşüş = +). SPY'a göre = sinyalin piyasaya katkısı.");
   return L.join("\n");
 }
 
@@ -719,7 +718,7 @@ function pickScanSet(st) {
 // ---------- Ana ----------
 export async function main() {
   const t0 = Date.now();
-  const files = await loadFiles([STATE_FILE, IVHIST_FILE, IDEA_FILES.idx, IDEA_FILES.fast]);   // fikir dosyaları YALNIZ OKUNUR
+  const files = await loadFiles([STATE_FILE, IVHIST_FILE, IDEA_FILES.fast]);   // fikir dosyaları YALNIZ OKUNUR
   if (files === READ_FAILED) {                // durum bilinmiyor → hiçbir şey yazma, tekrar sinyal spam'i de yapma
     console.log("⚠ Gist okunamadı (geçici) — bu run atlandı, durum korunuyor.");
     return 0;
@@ -739,7 +738,7 @@ export async function main() {
 
   // Tembel bağlam: komutlar gerektiğinde bir kez hesaplanır
   let _r = null, _spy = null;
-  const ideaBooks = { idx: files[IDEA_FILES.idx], fast: files[IDEA_FILES.fast] };
+  const ideaBooks = { fast: files[IDEA_FILES.fast] };                 // 15 dk artık plan: fikir defteri yok
   const ctx = { r: async () => (_r ??= await riskFreeRate()), spy: async () => (_spy ??= await spyReturn60()), ideas: ideaBooks };
 
   await handleCommands(st, ivStore, ctx);
