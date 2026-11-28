@@ -7,6 +7,12 @@
 //   • 2. dalga 1. dalganın %100'ünü geri alamaz (burada %38.2–78.6) · komşu dalgalar fiyatta birbirinin ≥ 1/3'ü (benzerlik)
 //   • 3. dalga en kısa olamaz (≥ 1. dalga) · 4. dalga 1. dalganın tepesine girmez (örtüşme yok) · 4. dalga 3'ün %25–61.8'i
 //   • 3. dalga uzamışsa (≥ 1.618 × 1. dalga) 5. dalga ≈ 1. dalga · ABC: C ≈ A (0.618–1.618), B, A'nın %38.2–88.6'sı
+// Kaynak müfredat: Uğur Perçin "Neowave – Elliott Dalga Teorisi" (itki, zikzak, flat, üçgenler) + Jamiryo "Elliott Dalgaları
+// Eğitim Serisi" (itki, zikzak, flat, diyagonaller, WXY) — videolardaki standart kurallar:
+//   • Zikzak (5-3-5): B, A'nın %38.2–88.6'sı · C ≈ A (0.618–1.618)
+//   • Flat (3-3-5): B, A'nın ≥ %81'i (genişleyen flat'te %100–138) · C, A'nın %100–165'i (A'nın bitişini geçer)
+//   • Daralan üçgen (a-b-c-d-e): tepeler alçalır, dipler yükselir, dalgalar küçülür → e'den sonra itki ≈ a dalgası boyu
+//   • Bitiş diyagonali (kama): 5 dalga daralarak aynı yöne, 4. dalga 1.'nin alanına girer (örtüşme) → başlangıca dönüş
 // Sinyaller (yön: C = yükseliş → CALL al, P = düşüş → PUT al; opsiyon SATIŞI yok):
 //   EW2  2. dalga bitti → 3. dalga başlıyor        EW4  4. dalga bitti → 5. dalga
 //   ABC  trend içi ABC düzeltmesi bitti            TLB  düşen trend çizgisi hacimle kırıldı (P: yükselen çizgi aşağı)
@@ -14,14 +20,17 @@
 // 200 HAFTALIK ORTALAMA (haftalık kapanış): UP yukarı kırdı · DN aşağı kırdı · TOUCH yükselişte ortalamaya geldi (destek)
 //   · RETEST kırılım sonrası geri test tuttu.
 export const TA = { ZZ_K: 2, ATR_N: 14, MIN_W: 3, HOR: 20, TLB_LOOK: 120, TLB_VOL: 1.2, DIP_DROP: 3,
-  WMA_N: 200, WMA_SIDE: 8, WMA_NEAR: 0.02, WMA_RETEST_WK: 12, NAMES: ["EW2", "EW4", "ABC", "TLB", "DIP"] };
+  WMA_N: 200, WMA_SIDE: 8, WMA_NEAR: 0.02, WMA_RETEST_WK: 12, NAMES: ["EW2", "EW4", "ABC", "FLAT", "TRI", "DIAG", "TLB", "DIP"] };
 export const TA_FILE = "abd_ta.json";
 export const TA_LABEL = {
   EW2: { C: "Elliott: 2. dalga bitti → 3. dalga başlıyor", P: "Elliott: düşüşte 2. dalga bitti → 3. dalga aşağı" },
   EW4: { C: "Elliott: 4. dalga bitti → 5. dalga yukarı", P: "Elliott: düşüşte 4. dalga bitti → 5. dalga aşağı" },
-  ABC: { C: "Elliott: ABC düzeltmesi bitti, trend devam", P: "Elliott: tepki (ABC) bitti, düşüş devam" },
+  ABC: { C: "Elliott: zikzak (ABC) düzeltme bitti, trend devam", P: "Elliott: zikzak (ABC) tepki bitti, düşüş devam" },
   TLB: { C: "Düşen trend çizgisi hacimle kırıldı", P: "Yükselen trend çizgisi aşağı kırıldı" },
   DIP: { C: "Dipten dönüş (RSI pozitif uyumsuzluk)", P: "Tepeden dönüş (RSI negatif uyumsuzluk)" },
+  FLAT: { C: "Elliott: yassı (flat) düzeltme bitti, trend devam", P: "Elliott: yassı (flat) tepki bitti, düşüş devam" },
+  TRI: { C: "Elliott: daralan üçgen bitti → yukarı itki", P: "Elliott: daralan üçgen bitti → aşağı itki" },
+  DIAG: { C: "Elliott: bitiş diyagonali (düşen kama) → dipten dönüş", P: "Elliott: bitiş diyagonali (yükselen kama) → tepeden dönüş" },
 };
 
 const emaArr = (c, n) => { const o = new Array(c.length).fill(null), k = 2 / (n + 1); let e = null;
@@ -113,6 +122,27 @@ export function taSignals(rows, P, i) {
         const pre = s * ((P.ema20[H0.i] ?? 0) - (P.ema50[H0.i] ?? 0)) > 0;
         if (A >= TA.MIN_W * a && v(Hb) < v(H0) && v(Lc) < v(La) && C / A >= 0.618 && C / A <= 1.618 && rb >= 0.382 && rb <= 0.886 && pre)
           out.push(mk("ABC", dir, S, Lc.p - s * 0.5 * a, H0.p, `C = ${(C / A).toFixed(2)}× A · B %${Math.round(rb * 100)}`));
+      }
+      // FLAT: [H0, La, Hb, Lc] — B neredeyse A'nın tamamını (≥ %81, ≤ %138) geri alır, C ≥ A (A'nın dibini geçer)
+      if (k.length >= 4) {
+        const [H0, La, Hb, Lc] = k.slice(-4), A = v(H0) - v(La), C = v(Hb) - v(Lc), rb = (v(Hb) - v(La)) / A;
+        const pre = s * ((P.ema20[H0.i] ?? 0) - (P.ema50[H0.i] ?? 0)) > 0;
+        if (A >= TA.MIN_W * a && rb >= 0.81 && rb <= 1.38 && C / A >= 1 && C / A <= 1.65 && pre)
+          out.push(mk("FLAT", dir, S, Lc.p - s * 0.5 * a, Math.max(s * H0.p, s * Hb.p) * s, `B %${Math.round(rb * 100)} · C = ${(C / A).toFixed(2)}× A`));
+      }
+      // TRI: [X0..X5] daralan üçgen; X5 = e dibi (CALL için). Öncesinde trend o yönde → itki ≈ a boyu
+      if (k.length >= 6) {
+        const X = k.slice(-6), h = [X[0], X[2], X[4]].map(v), l = [X[1], X[3], X[5]].map(v);
+        const legs = [0, 1, 2, 3, 4].map(q => Math.abs(X[q + 1].p - X[q].p)), pre = s * ((P.ema20[X[0].i] ?? 0) - (P.ema50[X[0].i] ?? 0)) > 0;
+        if (h[0] > h[1] && h[1] > h[2] && l[0] < l[1] && l[1] < l[2] && legs[0] > legs[2] && legs[2] > legs[4] && legs[0] >= TA.MIN_W * a && pre)
+          out.push(mk("TRI", dir, S, X[5].p - s * 0.5 * a, X[5].p + s * legs[0], `a ${(legs[0] / a).toFixed(1)} ATR → e ${(legs[4] / a).toFixed(1)} ATR`));
+      }
+      // DIAG: [X0..X5] düşen kama (CALL): tepeler ve dipler alçalır, dalgalar küçülür, 4. dalga 1.'nin alanına girer → X0'a dönüş
+      if (k.length >= 6) {
+        const X = k.slice(-6), legs = [0, 1, 2, 3, 4].map(q => Math.abs(X[q + 1].p - X[q].p));
+        const fall = v(X[0]) > v(X[2]) && v(X[2]) > v(X[4]) && v(X[1]) > v(X[3]) && v(X[3]) > v(X[5]);
+        if (fall && v(X[4]) > v(X[1]) && legs[0] > legs[2] && legs[2] > legs[4] && legs[0] >= TA.MIN_W * a)
+          out.push(mk("DIAG", dir, S, X[5].p - s * 0.5 * a, X[0].p, `5 dalga daralan kama · örtüşme var`));
       }
       // DIP: [Lp, H, L] — daha düşük dip + RSI uyumsuzluğu + öncesinde ≥ 3 ATR düşüş
       if (k.length >= 3) {
