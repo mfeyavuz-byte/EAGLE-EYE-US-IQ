@@ -2,6 +2,7 @@
 // sonuçlandırılır: önce HEDEF mi STOP mu geldi (aynı mumda ikisi = STOP sayılır, ihtiyatlı); ikisi de yoksa ufuk sonundaki
 // fiyatla R katı. R = |giriş − stop|. Sonuç dayanak hissede ölçülür (opsiyon primi değil; opsiyonda zaman kaybı ayrıca var).
 // Her yazan süreç KENDİ Gist dosyasına yazar (çakışma yok); tarama (run.mjs) yalnız okur (haftalık rapor, /fikirkarne).
+import { pausedList, keyLabel } from "./guard.mjs";
 export const IDEA_FILES = { idx: "abd_ideas_idx.json", fast: "abd_ideas_fast.json" };
 export const HORIZON = { idx: 60, fast: 30 };          // dk (kurulum fikirleri ufku ölçümden: 30/60)
 const MAX = 600;
@@ -62,6 +63,7 @@ export function fmtIdeaReport(books, now = Date.now()) {
     const ideas = (books?.[k]?.ideas || []).filter(it => !src || (it.src || "fast") === src);
     L.push(fmtIdeaStats(`${lab} · 7 gün`, ideaStats(ideas, d7)), fmtIdeaStats(`${lab} · 30 gün`, ideaStats(ideas, d30)));
   }
+  for (const p of pausedList(books?.fast?.ideas, now)) L.push(`⏸ ${keyLabel(p.key)} durdurulmuş: son 10 fikir ${p.s10}R · ${p.daysLeft} gün sonra küçük adetle yeniden denenir`);
   L.push("ℹ Başabaş: 1:2 risk/ödülde isabet ≥ %34 ve ortalama > 0R olmalı. Opsiyonda zaman kaybı ve spread bu sonucu düşürür.");
   return L.join("\n");
 }

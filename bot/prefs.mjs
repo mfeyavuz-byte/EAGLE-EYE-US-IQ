@@ -44,9 +44,9 @@ export function applyAcctCmd(p0, args) {
 }
 
 // Kontrat sayısı: stopta kontrat başı kayıp = (prim − stoptaki değer) × 100 (en az primin %30'u) → risk bütçesine göre adet
-export function sizeLine(p, prem, atStop) {
+export function sizeLine(p, prem, atStop, mult = 1) {
   if (!p?.acct || !(prem > 0)) return null;
-  const per = Math.max(prem - (atStop ?? 0), prem * 0.3) * 100, budget = p.acct * (p.risk || 0.01), n = Math.floor(budget / per);
+  const per = Math.max(prem - (atStop ?? 0), prem * 0.3) * 100, budget = p.acct * (p.risk || 0.01) * (mult > 0 ? mult : 1), n = Math.floor(budget / per);
   if (n < 1) return `Boyut: 1 kontrat bile riskinden büyük (stopta ~$${Math.round(per)} kayıp > $${Math.round(budget)}) → atla ya da küçült`;
   return `Boyut: ${n} kontrat (stopta ~$${Math.round(n * per)} kayıp = hesabın %${+((n * per) / p.acct * 100).toFixed(2)})`;
 }

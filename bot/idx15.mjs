@@ -130,7 +130,7 @@ async function oneSymbol(sym, ctx) {
 
 // ORTAK KONTRAT FİKRİ (15 dk fikri + ani hareket alarmı): yön + dayanak seviyeleri → likit kontrat, prim, opsiyonun stop/hedef
 // karşılığı, olasılıklar. allow0: bugün vadeli (0DTE) kullanılabilir mi. Dönüş: { pick, expD, lines }
-export async function contractIdea({ sym, dir, S, stop, target, r = 0.04, today, allow0 = false, timeStop = null, timeStopFn = null }) {
+export async function contractIdea({ sym, dir, S, stop, target, r = 0.04, today, allow0 = false, timeStop = null, timeStopFn = null, mult = 1, multTag = null }) {
   const first = await optionChain(sym).catch(() => null);
   const exps = (first?.expirations || []).map(e => ({ e, d: new Date(e * 1e3).toISOString().slice(0, 10) }));
   const ex = allow0 ? exps.find(x => x.d === today) ?? exps.find(x => x.d > today) : exps.find(x => x.d > today);
@@ -161,10 +161,11 @@ export async function contractIdea({ sym, dir, S, stop, target, r = 0.04, today,
   // SADE MESAJ: kontrat (başlıkta) · giriş / hedef / stop / süre · opsiyonun hedefte ve stopta tahmini değeri
   const ts = timeStop ?? (expD === today ? 45 : 90);
   const contract = pick ? `${expD === today ? "0DTE" : trD(expD)} ${pick.K}${dir} ~$${f2(pick.prem)}` : "kontrat yok (dayanakla izle)";
-  const size = pick ? sizeLine(SIZING, pick.prem, pick.atStop) : null;
+  const size = pick ? sizeLine(SIZING, pick.prem, pick.atStop, mult) : null;
   const L = [`   Giriş ${sym} ~${f2(S)} · Hedef ${f2(target)} · Stop ${f2(stop)} · süre ${ts} dk`];
   if (pick) L.push(`   Opsiyon hedefte ~$${f2(pick.atTgt)} · stopta ~$${f2(pick.atStop)}${Math.abs(pick.gap) > 0.003 ? " · ⚠ kotasyon bayat olabilir" : ""}`);
-  if (size) L.push("   " + size);
+  if (size) L.push("   " + size + (multTag ? ` · ${multTag}` : ""));
+  else if (pick && multTag) L.push(`   Adet ${mult === 1 ? "normal" : "×" + mult} — ${multTag}`);
   return { pick, expD, expClose, timeStop: ts, contract, size, lines: L };
 }
 

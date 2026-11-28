@@ -22,7 +22,8 @@ import { loadFiles, saveFiles, READ_FAILED } from "./state.mjs";
 import { IDEA_FILES, HORIZON, addIdea, settleIdeas } from "./ideabook.mjs";
 import { macroEvents, nearEvent, fmtNear } from "./macro.mjs";
 import { freshPrice, ageTxt } from "./liveaudit.mjs";
-import { paperBuy, paperClose, warnPaperFail } from "./optpaper.mjs";
+import { paperBuy, paperClose, warnPaperFail, paperQty } from "./optpaper.mjs";
+import { GUARD, guardDecision, clusterMembers, corrRet, computeLead, pausedList, keyLabel } from "./guard.mjs";
 import { TUNE_FILE, tunedValue } from "./tune.mjs";
 import { dayFeatures, setupsAt, breadthSeries, dayType, features } from "./setups.mjs";
 import { SETUPS_FILE, allowedFor, SETUP_LABEL, MEMBERS, modelCheck, INTERNALS_FILE } from "./setuplive.mjs";
@@ -124,6 +125,42 @@ async function barsFor(syms, sessStart, today) {
   return { bars, live: {} };
 }
 
+// KORUYUCU (bot/guard.mjs): canlı karnede kaybettiren tür durur · adet karneye göre · aynı yöne yığılma sınırı (lider sektöre esnek)
+function activeIdeas(st, book, now) {
+  const done = { ...(book?.exits || {}), ...(st.exits || {}) };
+  return readOpenLocal().filter(o => o.id && !done[o.id] && o.ts <= now && now - o.ts < GUARD.OPEN_MIN * 60e3);
+}
+// Sektör liderliği (11 SPDR vs SPY, bugünkü 5 dk mumlar): kurulum taraması zaten hesaplar; yoksa yalnız gerektiğinde çekilir
+async function ensureLead(st, now) {
+  if (st.lead && now - st.lead.ts < 10 * 60e3) return st.lead;
+  const { date: today } = nyParts(new Date(now)), sessStart = nyTs(today, 9, 30), syms = ["SPY", ...SET_SECS];
+  const bars = alpacaEnabled()
+    ? await intradayBars(syms, new Date(sessStart).toISOString(), "5Min").catch(() => null)
+    : Object.fromEntries(await Promise.all(syms.map(async s => [s, (await fetchChart(s, "5m", "1d").catch(() => [])).filter(b => b.ts >= sessStart)])));
+  const lead = bars ? computeLead(bars, now) : null;
+  if (lead) st.lead = lead;
+  return st.lead && now - st.lead.ts < 30 * 60e3 ? st.lead : null;
+}
+async function guardIdea(st, book, it, now) {
+  const open = activeIdeas(st, book, now), corrOf = (a, b) => corrRet(cache.bars[a], cache.bars[b]);
+  const lead = clusterMembers(it, open, corrOf).length ? await ensureLead(st, now).catch(() => null) : null;
+  const g = guardDecision(it, { ideas: book?.ideas, open, lead, corrOf, now });
+  console.log(`[koruma] ${it.sym} ${it.dir} ${g.ok ? `×${g.mult}${g.tag ? " · " + g.tag : ""}` : "gönderilmedi — " + g.why}`);
+  return g;
+}
+const paperQtyM = (prem, mult) => { const q = paperQty(prem); return q && mult !== 1 ? Math.max(1, Math.floor(q * mult)) : null; };
+// Yeni durdurulan tür → tek seferlik kısa bildirim (defterde tutulur; süreç yeniden başlasa da tekrar atılmaz)
+async function pauseNotices(book, prefs, now) {
+  const pl = pausedList(book.ideas, now), note = (book.pauseNote ||= {});
+  let ch = false;
+  for (const p of pl) {
+    if (note[p.key] || !isOn(prefs, p.key.startsWith("setup") ? "kurulum" : "ani")) continue;
+    if (await sendTG(`⏸ ${keyLabel(p.key)} durduruldu — canlıda son 10 fikir toplam ${p.s10}R. ${p.daysLeft} gün sonra ×${GUARD.TRIAL} adetle yeniden denenir.`)) { note[p.key] = now; ch = true; }
+  }
+  for (const k of Object.keys(note)) if (!pl.some(p => p.key === k)) { delete note[k]; ch = true; }
+  return ch;
+}
+
 // Tek tarama: bulunan alarmları gönderir. Dönüş: gönderilen sayısı
 // opts: { ev: makro olaylar, book: karne defteri (gönderilen alarm buraya eklenir) }
 export async function scanFast(st, now = Date.now(), toCloseMin = null, opts = {}) {
@@ -157,7 +194,9 @@ export async function scanFast(st, now = Date.now(), toCloseMin = null, opts = {
     // A/B: 0DTE'ye izin varken fikirler sırayla 0DTE / sonraki vade → sanal hesapta hangisi daha iyi, ölçülür
     const allow0 = ETFS.has(sym) && (toCloseMin ?? 960 - mins) > 90 && (st.ab = !st.ab);
     const closeMs = now + (toCloseMin ?? 960 - mins) * 60e3;                 // gerçek kapanış (erken kapanış dahil)
-    const c = await contractIdea({ sym, dir: sig.dir, S: sig.S, stop: sig.stop, target: sig.target, r, today, allow0, timeStop: capStop(30, closeMs, now) });
+    const g = await guardIdea(st, opts.book, { src: "fast", kind: sig.kind, dir: sig.dir, sym }, now);
+    if (!g.ok) { st.cd[sym] = now; continue; }
+    const c = await contractIdea({ sym, dir: sig.dir, S: sig.S, stop: sig.stop, target: sig.target, r, today, allow0, timeStop: capStop(30, closeMs, now), mult: g.mult, multTag: g.tag });
     const title = sig.kind === "burst" ? (sig.dir === "C" ? "⚡ Ani yükseliş" : "⚡ Ani düşüş") : (sig.dir === "C" ? "↩️ Dipten dönüş" : "↩️ Tepeden dönüş");
     console.log(`[⚡] ${sym} ${sig.kind} ${sig.dir} · ${sig.why} · ${sig.data}`);
     const near = fmtNear(nearEvent(opts.ev, now), now);
@@ -167,10 +206,10 @@ export async function scanFast(st, now = Date.now(), toCloseMin = null, opts = {
     if (await sendTG(text)) {
       st.cd[sym] = now; st.n++; sent++;
       const it = { src: "fast", sym, dir: sig.dir, kind: sig.kind, ts: now, S: sig.S, stop: sig.stop, target: sig.target, hor: HORIZON.fast,
-        z: Math.abs(sig.z), tstop: c.timeStop, expClose: c.expClose, ...(c.pick ? { occ: c.pick.sym, K: c.pick.K, exp: c.expD, prem: c.pick.prem, iv: +c.pick.iv.toFixed(4) } : {}) };
+        z: Math.abs(sig.z), mult: g.mult, tstop: c.timeStop, expClose: c.expClose, ...(c.pick ? { occ: c.pick.sym, K: c.pick.K, exp: c.expD, prem: c.pick.prem, iv: +c.pick.iv.toFixed(4) } : {}) };
       it.id = ideaId(it);
       if (it.occ) {
-        it.paper = await paperBuy(it.occ, it.prem, it.id).catch(() => null);           // sanal hesapta gerçek emir
+        it.paper = await paperBuy(it.occ, it.prem, it.id, paperQtyM(it.prem, g.mult)).catch(() => null);   // sanal hesapta gerçek emir
         if (!it.paper) await warnPaperFail(sendTG, it.occ).catch(() => {});
       }
       if (opts.book) addIdea(opts.book, it);
@@ -230,6 +269,7 @@ export async function scanSetups(st, now, toCloseMin, opts = {}) {
   const done = arr => (arr || []).filter(b => b.ts >= sessStart && b.ts + 300e3 <= now);
   const sec = Object.fromEntries(SET_SECS.map(s => [s, done(bars[s])]).filter(([, a]) => a.length >= 8));
   const mem = Object.fromEntries(MEMBERS.map(s => [s, done(bars[s])]).filter(([, a]) => a.length >= 3));
+  { const ld = computeLead({ SPY: done(bars.SPY), ...sec }, now); if (ld) st.lead = ld; }          // koruyucu için sektör liderliği
   // Dünkü seviyeler + günlük ATR (günde 1 kez)
   if (st.lvDay !== today) {
     st.lv = {};
@@ -255,20 +295,22 @@ export async function scanSetups(st, now, toCloseMin, opts = {}) {
       if (!mc.ok) { console.log(`[kurulum] ${sym} ${c.name} ${c.dir} model olasılığı %${Math.round(mc.p * 100)} < eşik → gönderilmedi`); continue; }
       const ck = `${sym}|${c.name}|${c.dir}`;
       if (now - ((st.setCd ||= {})[ck] || 0) < 30 * 60e3) continue;
+      const g = await guardIdea(st, opts.book, { src: "setup", setup: c.name, sym, dir: c.dir }, now);
+      if (!g.ok) { st.setCd[ck] = now; continue; }
       const S = freshPrice((await liveQuotes([sym]).catch(() => ({})))[sym], now, 120e3) ?? bs[i].close;
       const R = Math.abs(S - c.stop);
       if ((c.dir === "C" ? S <= c.stop : S >= c.stop) || !(R > 0)) continue;         // fiyat stopu çoktan geçtiyse fikir yok
       const target = +(c.dir === "C" ? S + 2 * R : S - 2 * R).toFixed(2), stop = +c.stop.toFixed(2);
       const closeMs = now + (toCloseMin ?? 960 - mins) * 60e3, r = await riskFreeRate().catch(() => 0.04);
-      const cc = await contractIdea({ sym, dir: c.dir, S, stop, target, r, today, allow0: (closeMs - now) / 60e3 > 90 && (st.ab = !st.ab), timeStop: capStop(a.hor, closeMs, now) });
+      const cc = await contractIdea({ sym, dir: c.dir, S, stop, target, r, today, allow0: (closeMs - now) / 60e3 > 90 && (st.ab = !st.ab), timeStop: capStop(a.hor, closeMs, now), mult: g.mult, multTag: g.tag });
       const near = fmtNear(nearEvent(opts.ev, now), now);
       const text = [`🎯 ${sym} ${c.dir === "C" ? "CALL" : "PUT"} AL — ${cc.contract}`, `   ${SETUP_LABEL[c.name][c.dir]} (test: ort +${a.m.toFixed(2)}R${mc.p != null ? ` · olasılık %${Math.round(mc.p * 100)}` : ""})`, ...cc.lines, ...(near ? ["   " + near] : [])].join("\n");
       if (!(await sendTG(text))) continue;
       st.setCd[ck] = now; sent++;
-      const it = { src: "setup", setup: c.name, sym, dir: c.dir, ts: now, S, stop, target, hor: a.hor, tstop: cc.timeStop, expClose: cc.expClose,
+      const it = { src: "setup", setup: c.name, sym, dir: c.dir, ts: now, S, stop, target, hor: a.hor, mult: g.mult, tstop: cc.timeStop, expClose: cc.expClose,
         ...(cc.pick ? { occ: cc.pick.sym, K: cc.pick.K, exp: cc.expD, prem: cc.pick.prem, iv: +cc.pick.iv.toFixed(4) } : {}) };
       it.id = ideaId(it);
-      if (it.occ) { it.paper = await paperBuy(it.occ, it.prem, it.id).catch(() => null); if (!it.paper) await warnPaperFail(sendTG, it.occ).catch(() => {}); }
+      if (it.occ) { it.paper = await paperBuy(it.occ, it.prem, it.id, paperQtyM(it.prem, g.mult)).catch(() => null); if (!it.paper) await warnPaperFail(sendTG, it.occ).catch(() => {}); }
       if (opts.book) addIdea(opts.book, it);
       pushOpenLocal([it], now);
       console.log(`[kurulum] ${sym} ${c.name} ${c.dir} GÖNDERİLDİ`);
@@ -308,6 +350,7 @@ async function main() {
           }
         }
         if (book && await settleIdeas(book, s => fetchChart(s, "1m", "5d")).catch(() => false)) await saveFiles({ [IDEA_FILES.fast]: book });
+        if (book && await pauseNotices(book, prefs, Date.now()).catch(() => false)) await saveFiles({ [IDEA_FILES.fast]: book });
       }
       if (Date.now() - evAt > 30 * 60e3) { ev = await macroEvents().catch(() => []); evAt = Date.now(); }
       if (Date.now() - clkAt > 5 * 60e3) { clk = await marketClock().catch(() => null); clkAt = Date.now(); }
