@@ -17,6 +17,15 @@ export const panelEnabled = () => !!(TOKEN && PID);
 export const TA_KARNE_FILE = join(process.env.RUNNER_TEMP || tmpdir(), "eagle_ta_karne.txt");
 export function writeTaKarne(text) { try { writeFileSync(TA_KARNE_FILE, sanitize(text)); } catch {} }
 export function readTaKarne() { try { return readFileSync(TA_KARNE_FILE, "utf8"); } catch { return null; } }
+// Son fikirler tablosu: tarama süreci formasyon/200 WMA kayıtlarını yerel JSON'a yazar, yayıncı gün içi fikirlerle birleştirir
+export const TA_RECENT_FILE = join(process.env.RUNNER_TEMP || tmpdir(), "eagle_ta_recent.json");
+export function writeTaRecent(book) { try { writeFileSync(TA_RECENT_FILE, JSON.stringify((book || []).slice(-30))); } catch {} }
+export function recentIdeas(fastIdeas, taBook, now = Date.now()) {
+  const a = (fastIdeas || []).filter(x => now - x.ts < 3 * 864e5).map(x => ({ ts: x.ts, src: x.src === "setup" ? `kurulum ${x.setup || ""}`.trim() : "ani hareket", sym: x.sym, dir: x.dir, res: x.res || null, r: x.r ?? null }));
+  const b = (taBook || []).map(x => ({ ts: x.ts ?? Date.parse(x.d + "T20:00:00Z"), src: x.src === "wma" ? `200 WMA ${x.name}` : `formasyon ${x.name}`, sym: x.sym, dir: x.dir, res: x.res || null, r: x.r ?? null }));
+  return [...a, ...b].filter(x => x.ts).sort((p, q) => q.ts - p.ts).slice(0, 40);
+}
+export function readTaRecent() { try { return JSON.parse(readFileSync(TA_RECENT_FILE, "utf8")); } catch { return []; } }
 
 // Kişisel: kontrat sayısı, hesap %'si, stopta $ kayıp (hesap büyüklüğünü ele verir) → silinir
 export function sanitize(text) {
@@ -44,9 +53,9 @@ export function seedFeed(items, file = PANEL_FEED) {
   try { writeFileSync(file, (items || []).map(x => JSON.stringify(x)).join("\n") + (items?.length ? "\n" : "")); } catch {}
 }
 
-export function buildSnapshot({ feed, internals = null, lead = null, karne = null, paused = [], open = [], now = Date.now() }) {
+export function buildSnapshot({ feed, internals = null, lead = null, karne = null, paused = [], open = [], recent = [], now = Date.now() }) {
   return {
-    v: 1, ts: now, feed,
+    v: 1, ts: now, feed, recent,
     internals: internals ? { dt: internals.dt ?? null, mb: internals.mb ?? null, br: internals.br ?? null, up: internals.up ?? null, ts: internals.ts ?? null } : null,
     lead: lead?.rel ? { ts: lead.ts, spy: lead.spy, rel: lead.rel, ret: lead.ret } : null,
     karne: karne ? sanitize(karne) : null,

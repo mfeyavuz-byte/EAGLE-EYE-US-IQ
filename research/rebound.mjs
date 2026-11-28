@@ -5,6 +5,7 @@
 import { fetchHistory } from "../data/yahoo.mjs";
 import { loadUniverse } from "../spot/scan.mjs";
 import { reboundSignal, REB } from "../bot/rebound.mjs";
+import { indicators, holdPick } from "../bot/hold.mjs";
 
 const N = +(process.env.REB_N || 120);
 const U = loadUniverse();
@@ -15,17 +16,21 @@ const VARIANTS = {
   "RSI2<2 · 200g üstü": { rsi2: 2, deep: null, need200: true },
   "RSI2<5 · 200g ŞARTI YOK": { rsi2: 5, deep: null, need200: false },
   "RSI2<5 · 200g üstü · 3 gün düşüş": { rsi2: 5, deep: null, need200: true, down3: true },
+  "CANLI kural + 6 ay momentum lideri": { rsi2: 5, deep: 2, need200: true, mom: true },          // kesişim testi
 };
+const spyRows = await fetchHistory("SPY", "2014-01-01").catch(() => []), dk = ts => new Date(ts).toISOString().slice(0, 10);
+const spyAt = new Map(spyRows.map((r, k) => [dk(r.ts), k]));
 const res = Object.fromEntries(Object.keys(VARIANTS).map(k => [k, []])), base = [];
 for (const s of syms) {
   const rows = await fetchHistory(s, "2015-01-01").catch(() => []);
   if (rows.length < 300) continue;
-  const c = rows.map(r => r.close);
+  const c = rows.map(r => r.close), ind = indicators(rows);
   for (let i = 220; i < rows.length - 11; i++) {
     const exitAt = k => { for (let j = k + 1; j <= Math.min(rows.length - 1, k + REB.MAX_HOLD); j++) { const s5 = c.slice(j - 4, j + 1).reduce((a, b) => a + b, 0) / 5; if (c[j] > s5) return j; } return Math.min(rows.length - 1, k + REB.MAX_HOLD); };
     if (i % 7 === 0) { const j = exitAt(i); base.push({ r: c[j] / c[i] - 1, d: j - i }); }
     for (const [k, v] of Object.entries(VARIANTS)) {
       if (!reboundSignal(rows.slice(0, i + 1), v)) continue;
+      if (v.mom) { const k = spyAt.get(dk(rows[i].ts)); if (!(k >= 120) || !holdPick("MOM", rows, ind, i, spyRows[k].close / spyRows[k - 120].close - 1)) continue; }
       const j = exitAt(i);
       res[k].push({ r: c[j] / c[i] - 1, d: j - i });
       i += 0;                                                        // aynı gün birden çok varyant ayrı sayılır

@@ -62,6 +62,8 @@ export function fmtIdeaReport(books, now = Date.now()) {
   for (const [k, lab, src] of [["fast", "⚡ Ani hareket", "fast"], ["fast", "🎯 Ölçülmüş kurulumlar", "setup"]]) {   // 15 dk artık plan (fikir kaydı yok)
     const ideas = (books?.[k]?.ideas || []).filter(it => !src || (it.src || "fast") === src);
     L.push(fmtIdeaStats(`${lab} · 7 gün`, ideaStats(ideas, d7)), fmtIdeaStats(`${lab} · 30 gün`, ideaStats(ideas, d30)));
+    const ld = ideas.filter(it => it.lead === true), ot = ideas.filter(it => it.lead === false);      // kesişim: lider sektörde mi
+    if (ld.length || ot.length) L.push(fmtIdeaStats(`   ↳ lider sektörde · 30 gün`, ideaStats(ld, d30)), fmtIdeaStats(`   ↳ diğer · 30 gün`, ideaStats(ot, d30)));
   }
   { const a = (books?.fast?.ideas || []).filter(it => it.amb && it.ts >= d30).length;
     if (a) L.push(`🔁 30 günde ${a} fikirde hedef ve stop aynı 1 dk mumda → stop sayıldı (ihtiyatlı)`); }

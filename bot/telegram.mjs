@@ -1,7 +1,7 @@
 // Telegram — gönderim + komut okuma (getUpdates).
 // DRY_RUN=1 → mesajlar gönderilmez, konsola yazılır (yerel test).
 // ÖNEMLİ: Bu bot için AYRI bir token kullan (bist-bot ile aynı token'ı iki workflow okursa komutlar kaybolur).
-import { panelRecord } from "./panel.mjs";
+import { panelRecord, sanitize } from "./panel.mjs";
 const TOKEN = process.env.TG_TOKEN || "";
 export const CHAT = process.env.TG_CHAT || "";
 const DRY = process.env.DRY_RUN === "1";
@@ -62,8 +62,18 @@ export async function sendTG(text, { buttons = null, panel = null } = {}) {
     if (!sent) ok = false;
     if (i < parts.length - 1) await sleep(1100);
   }
-  if (ok && panel) panelRecord(panel, text);
+  if (ok && panel) { panelRecord(panel, text); await pushPhone(panel, text); }
   return ok;
+}
+// TELEFON BİLDİRİMİ (isteğe bağlı): NTFY_TOPIC secret'ı varsa önemli fikirler ntfy uygulamasına da gider (kişisel satırlar silinir).
+const NTFY = process.env.NTFY_TOPIC || "", PUSH_CATS = new Set(["fikir", "cikis", "ta", "wma", "tutus", "donus"]);
+async function pushPhone(cat, text) {
+  if (!NTFY || !PUSH_CATS.has(cat)) return;
+  const t = sanitize(text), [title, ...rest] = t.split("\n");
+  try {
+    await fetch(`https://ntfy.sh/${encodeURIComponent(NTFY)}`, { method: "POST", body: rest.join("\n").slice(0, 3500) || title,
+      headers: { Title: encodeURIComponent(title.slice(0, 120)), "X-Title-Encoding": "url", Priority: cat === "cikis" ? "high" : "default", Tags: "eagle" } });
+  } catch (e) { console.error("[ntfy]", e?.message || e); }
 }
 
 // Yeni komutları getir. Dönüş: { updates:[{text}], offset } — yalnızca yetkili sohbetten gelenler.

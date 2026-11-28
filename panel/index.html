@@ -125,7 +125,11 @@ function render(p) {
   $("#market").innerHTML = mk;
   // KARNE
   const pz = p.paused || [];
-  $("#karne").innerHTML = `<h2>Gün içi fikir karnesi</h2>` + (p.karne ? `<div class="card"><div class="txt">${esc(p.karne)}</div></div>` : `<div class="empty">Henüz yok.</div>`) +
+  const rc = p.recent || [], RES = { HEDEF: "🎯 hedef", STOP: "🛑 stop", "SÜRE": "⏱ süre" };
+  const sum = {}; for (const x of rc) { const k = x.src.split(" ")[0]; const o = (sum[k] ||= { n: 0, w: 0, r: 0, open: 0 }); if (x.res && x.r != null) { o.n++; o.r += x.r; if (x.r > 0) o.w++; } else o.open++; }
+  const recentHtml = rc.length ? `<h2>Son fikirler</h2><div class="card"><div class="stats">${Object.entries(sum).map(([k, o]) => `<div class="stat"><div class="k">${esc(k)}</div><div class="v">${o.n ? (o.r / o.n >= 0 ? "+" : "") + (o.r / o.n).toFixed(2) + "R" : "—"}</div><div class="k">${o.n ? `isabet %${Math.round(o.w / o.n * 100)} · ` : ""}açık ${o.open}</div></div>`).join("")}</div>` +
+    rc.map(x => `<div class="row"><span class="sym ${x.dir}">${esc(x.sym)} ${x.dir === "C" ? "CALL" : "PUT"}</span><span>${esc(x.src)}</span><span>${x.res ? `${RES[x.res] || esc(x.res)} ${x.r >= 0 ? "+" : ""}${(+x.r).toFixed(2)}R` : "açık"}</span><span class="sub">${trTime(x.ts)} TR</span></div>`).join("") + `</div>` : "";
+  $("#karne").innerHTML = recentHtml + `<h2>Gün içi fikir karnesi</h2>` + (p.karne ? `<div class="card"><div class="txt">${esc(p.karne)}</div></div>` : `<div class="empty">Henüz yok.</div>`) +
     (pz.length ? `<h2>Durdurulan türler</h2><div class="card">${pz.map(x => `<div class="row"><span class="sym">${esc(x.key.split("|").slice(1).join(" "))}</span><span>son 10: ${x.s10}R</span><span class="sub" style="grid-column:auto">${x.daysLeft} gün</span></div>`).join("")}</div>` : "") +
     block(feed, "gunsonu", "Gün sonu", "Kapanıştan sonra gelir.") +
     (feed.some(x => x.cat === "karne") ? `<h2>Durdurma bildirimleri</h2>` + feed.filter(x => x.cat === "karne").slice(-5).reverse().map(x => card(x)).join("") : "") +

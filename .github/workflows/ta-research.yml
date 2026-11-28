@@ -22,12 +22,22 @@ jobs:
           GIST_ID: ${{ secrets.GIST_ID }}
         run: |
           set -o pipefail
-          node research/ta.mjs | tee out.txt
+          TA_DUMP=ta_signals.json node research/ta.mjs | tee out.txt
           { echo '```'; sed -n '/^SONUÇ/,$p' out.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Gerçek opsiyon fiyatıyla test (Alpaca)
+        if: always()
+        env:
+          ALPACA_KEY_ID: ${{ secrets.ALPACA_KEY_ID }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+        run: |
+          node research/ta-opt.mjs ta_signals.json | tee opt.txt
+          { echo '```'; sed -n '/^SONUÇ/,$p' opt.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: Sonucu Telegram'a gönder
         if: always()
         env:
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_CHAT: ${{ secrets.TG_CHAT }}
           BT_INFO: "Teknik formasyon testi · commit ${{ github.sha }}"
-        run: node options/send-report.mjs out.txt
+        run: |
+          node options/send-report.mjs out.txt
+          [ -s opt.txt ] && BT_INFO="Formasyonlar opsiyon fiyatıyla · commit ${{ github.sha }}" node options/send-report.mjs opt.txt || true

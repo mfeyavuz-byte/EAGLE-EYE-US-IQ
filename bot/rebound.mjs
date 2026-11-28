@@ -39,5 +39,6 @@ export function reboundSignal(rows, opt = {}) {
 export function fmtRebound(list) {
   if (!list.length) return null;
   return ["🔄 AŞIRI SATIM — HIZLI DÖNÜŞ ADAYLARI (kaliteli, uzun vadede yükselen, sert satılmış)",
-    ...list.map(x => `${x.sym} ${x.close.toFixed(2)} · Giriş kapanışa yakın · Hedef ${x.target} · Stop ${x.stop} · en çok 10 gün${x.contract ? ` · ${x.contract}` : ""}`)].join("\n");
+    ...list.map(x => `${x.mom ? "⭐ " : ""}${x.sym} ${x.close.toFixed(2)} · Giriş kapanışa yakın · Hedef ${x.target} · Stop ${x.stop} · en çok 10 gün${x.contract ? ` · ${x.contract}` : ""}`),
+    ...(list.some(x => x.mom) ? ["⭐ = momentum lideri (ölçüm: ort +%1.19 / 3.8 gün, kazanan %72)"] : [])].join("\n");
 }

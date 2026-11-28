@@ -10,7 +10,9 @@ import { holdUniverse, indicators, holdPick } from "../bot/hold.mjs";
 import { SECTOR_ETF } from "../bot/edge.mjs";
 import { TA, TA_FILE, TA_LABEL, TF_LABEL, WMA_LABEL, prep, taSignals, taOutcome, wmaArr, wmaEvent, tfMatch, sectorLead20 } from "../bot/ta.mjs";
 import { saveFiles, gistEnabled } from "../bot/state.mjs";
+import { writeFileSync } from "node:fs";
 
+const DUMP = process.env.TA_DUMP || "";
 const U = loadUniverse(), NU = +(process.env.TA_N || 150), syms = holdUniverse(U, 1000);
 const day = ts => new Date(ts).toISOString().slice(0, 10);
 const spy = await fetchHistory("SPY", "2010-01-01");
@@ -56,7 +58,15 @@ for (const [s, x] of Object.entries(D)) {
     const fl = { mom: !!holdPick("MOM", x.rows, ind, j, spy[t].close / spy[t - 120].close - 1), lead: !!(etf && leadOf(t)[etf]) };
     for (const sg of sgs) {
       const f10 = x.rows[j + 10].close / x.rows[j].close - 1;
-      recs.push({ train: t < split, name: sg.name, dir: sg.dir, r: taOutcome(x.rows, j, sg), ex: (sg.dir === "C" ? 1 : -1) * (f10 - base10.get(t)), trend: sg.trend, fl });
+      const rec = { train: t < split, name: sg.name, dir: sg.dir, r: taOutcome(x.rows, j, sg), ex: (sg.dir === "C" ? 1 : -1) * (f10 - base10.get(t)), trend: sg.trend, fl };
+      if (DUMP && dates[t] >= "2024-02-20") {                                  // opsiyon testi için (Alpaca geçmiş opsiyon verisi Şubat 2024'ten)
+        let k = j + 1; for (; k < x.rows.length - 1 && k < j + TA.HOR; k++) { const b = x.rows[k], up = sg.dir === "C";
+          if ((up ? b.low <= sg.stop : b.high >= sg.stop) || (up ? b.high >= sg.target : b.low <= sg.target)) break; }
+        const lr = x.rows.slice(j - 20, j + 1).map((b, q, a) => (q ? Math.log(b.close / a[q - 1].close) : 0)).slice(1), m = lr.reduce((p, v) => p + v, 0) / lr.length;
+        Object.assign(rec, { sym: s, d: dates[t], ed: day(x.rows[k].ts), S: sg.S, stop: sg.stop, target: sg.target,
+          hv: Math.sqrt(lr.reduce((p, v) => p + (v - m) ** 2, 0) / (lr.length - 1) * 252) });
+      }
+      recs.push(rec);
     }
   }
 }
@@ -99,5 +109,7 @@ const lab = a => `${a.dir === "C" ? "CALL" : "PUT"} — ${TA_LABEL[a.name][a.dir
 console.log(["ÖZET", `🧪 Teknik formasyon testi (${Object.keys(D).length} büyük hisse, ${dates[START].slice(0, 4)} sonrası; son %40 hiç görülmeden sınandı)`,
   ...(slim.length ? slim.map(a => `✅ ${lab(a)}: isabet %${Math.round(a.w * 100)} · işlem başı +${a.m}R → canlıda`) : ["❌ Hiçbir formasyon testi geçmedi → formasyon mesajı gönderilmeyecek."]),
   ...Object.entries(wma).map(([ev, x]) => `📏 ${WMA_LABEL[ev]}: 13 haftada piyasadan ${p(x.x13)} (${x.n} olay) → ${x.x13 > 0 ? "işe yarıyor" : "zayıf, ihtiyatlı"}`)].join("\n"));
+if (DUMP) writeFileSync(DUMP, JSON.stringify(recs.filter(r => r.sym && slim.some(a => a.name === r.name && a.dir === r.dir && tfMatch(a.tf, r, r.fl)))
+  .map(r => ({ ...r, tf: slim.find(a => a.name === r.name && a.dir === r.dir && tfMatch(a.tf, r, r.fl)).tf }))));
 if (gistEnabled() && process.env.TA_SAVE !== "0")
   console.log((await saveFiles({ [TA_FILE]: { d: new Date().toISOString().slice(0, 10), allow: slim, wma } })) ? "Sonuç Gist'e yazıldı." : "⚠ Sonuç yazılamadı.");

@@ -35,3 +35,22 @@ test("panel: özet yalnız piyasa verisi taşır", () => {
   assert.equal(s.open[0].paper, undefined); assert.equal(s.open[0].occ, undefined);
   assert.doesNotMatch(JSON.stringify(s), /acct|mypos|risk/);
 });
+
+import { recentIdeas } from "../bot/panel.mjs";
+import { earnInfo } from "../bot/run.mjs";
+
+test("bilanço filtresi: vadeden önce uyarı, 5 gün içinde atla, geçmiş bilanço yok sayılır", () => {
+  const ts = d => Date.parse(d + "T21:00:00Z") / 1e3;
+  assert.deepEqual(earnInfo(ts("2026-12-03"), "2026-12-18", "2026-12-01"), { d: "2026-12-03", soon: true, before: true });
+  assert.deepEqual(earnInfo(ts("2027-01-20"), "2026-12-18", "2026-12-01"), { d: "2027-01-20", soon: false, before: false });
+  assert.equal(earnInfo(ts("2026-11-20"), "2026-12-18", "2026-12-01"), null);
+  assert.equal(earnInfo(null, "2026-12-18", "2026-12-01"), null);
+});
+
+test("panel: son fikirler tablosu gün içi + formasyon birleşik, yeniden eskiye", () => {
+  const now = Date.parse("2026-12-01T20:00:00Z");
+  const r = recentIdeas([{ ts: now - 3600e3, src: "setup", setup: "RECLAIM", sym: "SPY", dir: "C", res: "HEDEF", r: 2 }, { ts: now - 5 * 864e5, src: "fast", sym: "OLD", dir: "C" }],
+    [{ src: "ta", name: "EW2", sym: "AAPL", dir: "C", d: "2026-11-30", ts: now - 864e5 }], now);
+  assert.deepEqual(r.map(x => x.sym), ["SPY", "AAPL"]);
+  assert.equal(r[0].src, "kurulum RECLAIM"); assert.equal(r[1].src, "formasyon EW2"); assert.equal(r[1].res, null);
+});

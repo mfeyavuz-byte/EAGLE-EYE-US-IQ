@@ -20,7 +20,7 @@ import { closeTsOf } from "../data/market.mjs";
 import { sendTG } from "./telegram.mjs";
 import { loadFiles, saveFiles, READ_FAILED } from "./state.mjs";
 import { IDEA_FILES, HORIZON, addIdea, settleIdeas, fmtIdeaReport } from "./ideabook.mjs";
-import { panelEnabled, PANEL, readFeed, seedFeed, loadPanel, buildSnapshot, publishPanel, readTaKarne } from "./panel.mjs";
+import { panelEnabled, PANEL, readFeed, seedFeed, loadPanel, buildSnapshot, publishPanel, readTaKarne, readTaRecent, recentIdeas } from "./panel.mjs";
 import { macroEvents, nearEvent, fmtNear } from "./macro.mjs";
 import { freshPrice, ageTxt } from "./liveaudit.mjs";
 import { paperBuy, paperClose, warnPaperFail, paperQty } from "./optpaper.mjs";
@@ -144,7 +144,7 @@ async function ensureLead(st, now) {
 }
 async function guardIdea(st, book, it, now) {
   const open = activeIdeas(st, book, now), corrOf = (a, b) => corrRet(cache.bars[a], cache.bars[b]);
-  const lead = clusterMembers(it, open, corrOf).length ? await ensureLead(st, now).catch(() => null) : null;
+  const lead = await ensureLead(st, now).catch(() => null);                // kesişim karnesi için her fikirde (10 dk önbellek)
   const g = guardDecision(it, { ideas: book?.ideas, open, lead, corrOf, now });
   console.log(`[koruma] ${it.sym} ${it.dir} ${g.ok ? `×${g.mult}${g.tag ? " · " + g.tag : ""}` : "gönderilmedi — " + g.why}`);
   return g;
@@ -207,7 +207,7 @@ export async function scanFast(st, now = Date.now(), toCloseMin = null, opts = {
     if (await sendTG(text, { panel: "fikir" })) {
       st.cd[sym] = now; st.n++; sent++;
       const it = { src: "fast", sym, dir: sig.dir, kind: sig.kind, ts: now, S: sig.S, stop: sig.stop, target: sig.target, hor: HORIZON.fast,
-        z: Math.abs(sig.z), mult: g.mult, tstop: c.timeStop, expClose: c.expClose, ...(c.pick ? { occ: c.pick.sym, K: c.pick.K, exp: c.expD, prem: c.pick.prem, iv: +c.pick.iv.toFixed(4) } : {}) };
+        z: Math.abs(sig.z), mult: g.mult, lead: g.leader ?? null, tstop: c.timeStop, expClose: c.expClose, ...(c.pick ? { occ: c.pick.sym, K: c.pick.K, exp: c.expD, prem: c.pick.prem, iv: +c.pick.iv.toFixed(4) } : {}) };
       it.id = ideaId(it);
       if (it.occ) {
         it.paper = await paperBuy(it.occ, it.prem, it.id, paperQtyM(it.prem, g.mult)).catch(() => null);   // sanal hesapta gerçek emir
@@ -308,7 +308,7 @@ export async function scanSetups(st, now, toCloseMin, opts = {}) {
       const text = [`🎯 ${sym} ${c.dir === "C" ? "CALL" : "PUT"} AL — ${cc.contract}`, `   ${SETUP_LABEL[c.name][c.dir]} (test: ort +${a.m.toFixed(2)}R${mc.p != null ? ` · olasılık %${Math.round(mc.p * 100)}` : ""})`, ...cc.lines, ...(near ? ["   " + near] : [])].join("\n");
       if (!(await sendTG(text, { panel: "fikir" }))) continue;
       st.setCd[ck] = now; sent++;
-      const it = { src: "setup", setup: c.name, sym, dir: c.dir, ts: now, S, stop, target, hor: a.hor, mult: g.mult, tstop: cc.timeStop, expClose: cc.expClose,
+      const it = { src: "setup", setup: c.name, sym, dir: c.dir, ts: now, S, stop, target, hor: a.hor, mult: g.mult, lead: g.leader ?? null, tstop: cc.timeStop, expClose: cc.expClose,
         ...(cc.pick ? { occ: cc.pick.sym, K: cc.pick.K, exp: cc.expD, prem: cc.pick.prem, iv: +cc.pick.iv.toFixed(4) } : {}) };
       it.id = ideaId(it);
       if (it.occ) { it.paper = await paperBuy(it.occ, it.prem, it.id, paperQtyM(it.prem, g.mult)).catch(() => null); if (!it.paper) await warnPaperFail(sendTG, it.occ).catch(() => {}); }
@@ -344,7 +344,7 @@ async function panelStep(st, book, open) {
   const now = Date.now(), done = { ...(book?.exits || {}), ...(st.exits || {}) };
   const openIdeas = readOpenLocal().filter(o => o.id && !done[o.id] && o.ts <= now && now - o.ts < 6 * 3600e3);
   await publishPanel(buildSnapshot({ feed: readFeed(), internals: readInternals(now, 30 * 60e3), lead: st.lead,
-    karne: [book ? fmtIdeaReport({ fast: book }, now) : null, readTaKarne()].filter(Boolean).join("\n\n") || null, paused: book ? pausedList(book.ideas, now) : [], open: openIdeas, now }));
+    karne: [book ? fmtIdeaReport({ fast: book }, now) : null, readTaKarne()].filter(Boolean).join("\n\n") || null, paused: book ? pausedList(book.ideas, now) : [], open: openIdeas, recent: recentIdeas(book?.ideas, readTaRecent(), now), now }));
 }
 // Uzun yaşayan döngü: ~55 dk çalışır, sonra çıkar (iş akışı yeniden başlatır). FAST_ONCE=1 → tek tarama (test).
 async function main() {

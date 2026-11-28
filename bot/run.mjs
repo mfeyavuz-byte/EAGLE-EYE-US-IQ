@@ -52,7 +52,7 @@ import { HOLD_FILE, HOLD, holdUniverse, indicators, holdPick, pickList, fmtHold,
 import { TA_FILE, prep, taSignals, wmaArr, wmaEvent, fmtTa, fmtWma, tfMatch, sectorLead20, settleTa, fmtTaBook } from "./ta.mjs";
 import { keyState, pausedList, keyLabel } from "./guard.mjs";
 import { SECTOR_ETF } from "./edge.mjs";
-import { writeTaKarne } from "./panel.mjs";
+import { writeTaKarne, writeTaRecent } from "./panel.mjs";
 import { fetchChart } from "../data/yahoo.mjs";
 import { pickTenor } from "./morning.mjs";
 import { earningsOn, reportDates } from "../data/nasdaq.mjs";
@@ -61,14 +61,15 @@ async function weeklyIdeaExtras(st) {
   const pr = await paperOptReport(7).catch(() => null);
   return (pr ? "\n" + pr : "") + (st.tune ? "\n" + fmtTune(st.tune) : "") + "\n" + fmtEarnBook(st.earn?.closed);
 }
+const spyIr120 = () => { const s = dailyCache.get("SPY") || []; return s.length > 121 ? s.at(-1).close / s.at(-121).close - 1 : 0; };
 async function reboundStep(st, today, all) {
   const cands = [];
   for (const a of all || []) {
     if (!a || !(a.dollarVol >= CFG.MIN_DVOL) || a.price < 10) continue;
     const rows = dailyCache.get(a.sym), sig = rows && reboundSignal(rows, { deep: 2 });
-    if (sig) cands.push({ sym: a.sym, ...sig });
+    if (sig) cands.push({ sym: a.sym, ...sig, mom: !!holdPick("MOM", rows, indicators(rows), rows.length - 1, spyIr120()) });
   }
-  cands.sort((x, y) => x.rsi2 - y.rsi2);
+  cands.sort((x, y) => (y.mom - x.mom) || (x.rsi2 - y.rsi2));               // kesişim: momentum liderleri önce
   const out = [], r = await riskFreeRate().catch(() => 0.04);
   st.qual ||= {};
   for (const c of cands.slice(0, 20)) {
@@ -76,9 +77,9 @@ async function reboundStep(st, today, all) {
     let q = st.qual[c.sym]?.q;
     if (!q) { q = await qualityStats(c.sym).catch(() => null); if (q) st.qual[c.sym] = { t: Date.now(), q: { margin: q.margin, roe: q.roe, fcf: q.fcf, de: q.de } }; }
     if (weakQuality(q) !== false) continue;                                  // zarar eden / nakit yakan / aşırı borçlu ya da veri yok → ele
-    const ch = await loadChain(c.sym, r, { minDte: 10, maxDte: 30, targets: [18] }).catch(() => null);
-    const t = pickTenor(ch, 10, 30, "C", 0.5);
-    out.push({ ...c, contract: t ? `${t.expD.slice(8, 10)}.${t.expD.slice(5, 7)} ${t.c.K}C ~${t.prem.toFixed(2)}` : null });
+    const o = await optTxt(c.sym, "C", r, 10, 30, 18, today);
+    if (o.soon) continue;                                                     // bilanço 5 gün içinde → dönüş fikri verilmez
+    out.push({ ...c, contract: o.txt });
   }
   st.rebDay = today;
   const txt = fmtRebound(out);
@@ -103,8 +104,7 @@ async function holdStep(st, today) {
   }
   const list = pickList(cands, HOLD.N_LIVE), r = await riskFreeRate().catch(() => 0.04);
   for (const x of list) {                                                    // ~2 ay vadeli, delta ≈ 0.5 call (yalnız ALIM)
-    const ch = await loadChain(x.sym, r, { minDte: 40, maxDte: 75, targets: [60] }).catch(() => null), t = pickTenor(ch, 40, 75, "C", 0.5);
-    if (t) x.contract = `${t.expD.slice(8, 10)}.${t.expD.slice(5, 7)} ${t.c.K}C ~$${t.prem.toFixed(2)}`;
+    x.contract = (await optTxt(x.sym, "C", r, 40, 75, 60, today)).txt;
   }
   const txt = fmtHold(list, cfg);
   st.holdLast = txt ? { d: today, txt } : null;
@@ -115,9 +115,18 @@ async function holdStep(st, today) {
 // Formasyonlar: yalnız research/ta.mjs testini geçenler (abd_ta.json allow). 200 haftalık: kullanıcı isteğiyle HER ZAMAN net öneri +
 // mesajda geçmiş ölçüm. Kırılım (yukarı/aşağı) yalnız haftanın son işlem gününde (haftalık kapanış teyidi); ortalamaya geliş her gün.
 const WMA_EXTRA = ["SPY", "QQQ", "IWM", "DIA", "GLD", "SLV"];
-async function optTxt(sym, dir, r, lo, hi, tgt) {
+// BİLANÇO FİLTRESİ: kontrat vadesinden önce bilanço → uyarı (IV çöküşü primi eritebilir); ≤ 5 gün içinde → fikir verilmez
+export function earnInfo(earningsTs, expD, today) {
+  if (!earningsTs) return null;
+  const d = new Date(earningsTs * 1e3).toISOString().slice(0, 10);
+  if (d < today) return null;
+  return { d, soon: (Date.parse(d) - Date.parse(today)) / 864e5 <= 5, before: !!expD && d <= expD };
+}
+const earnTag = e => (e?.before ? ` · ⚠ bilanço ${e.d.slice(8, 10)}.${e.d.slice(5, 7)} (vadeden önce)` : "");
+async function optTxt(sym, dir, r, lo, hi, tgt, today = nyDate()) {
   const ch = await loadChain(sym, r, { minDte: lo, maxDte: hi, targets: [tgt] }).catch(() => null), t = pickTenor(ch, lo, hi, dir, 0.5);
-  return t ? `${t.expD.slice(8, 10)}.${t.expD.slice(5, 7)} ${t.c.K}${dir} ~$${t.prem.toFixed(2)}` : null;
+  const e = earnInfo(ch?.earningsTs, t?.expD, today);
+  return { txt: t ? `${t.expD.slice(8, 10)}.${t.expD.slice(5, 7)} ${t.c.K}${dir} ~$${t.prem.toFixed(2)}${earnTag(e)}` : null, soon: !!e?.soon };
 }
 export async function taStep(st, today, wd) {
   const f = await loadFiles([TA_FILE]).catch(() => READ_FAILED);
@@ -150,8 +159,13 @@ export async function taStep(st, today, wd) {
         pats.push({ sym: s, ...sg, a });
       }
     }
-    const top = pats.sort((x, y) => y.a.m - x.a.m).slice(0, 8);
-    for (const x of top) x.contract = await optTxt(x.sym, x.dir, r, 25, 50, 35);
+    const top = [];
+    for (const x of pats.sort((x, y) => y.a.m - x.a.m)) {
+      if (top.length >= 8) break;
+      const o = await optTxt(x.sym, x.dir, r, 25, 50, 35, today);
+      if (o.soon) { console.log(`[Formasyon] ${x.sym}: bilanço 5 gün içinde → atlandı`); continue; }
+      x.contract = o.txt; top.push(x);
+    }
     const txt = fmtTa(top);
     if (txt && await sendTG(txt, { panel: "ta" })) for (const x of top) book.push({ src: "ta", ts: Date.now(), name: x.name, dir: x.dir, sym: x.sym, d: today, S: x.S, stop: x.stop, target: x.target, tf: x.a.tf });
     console.log(`[Formasyon] aday ${pats.length} · gönderilen ${top.length}`);
@@ -168,7 +182,7 @@ export async function taStep(st, today, wd) {
       if (sent[k] && Date.parse(today) - Date.parse(sent[k]) < 28 * 864e5) continue;          // aynı olay 4 haftada 1 kez
       ev.push({ sym: s, px: w.at(-1).close, ...e });
     }
-    for (const x of ev.slice(0, 10)) x.contract = await optTxt(x.sym, x.dir, r, 50, 110, 75);
+    for (const x of ev.slice(0, 10)) x.contract = (await optTxt(x.sym, x.dir, r, 50, 110, 75, today)).txt;
     const txt = fmtWma(ev.slice(0, 10), cfg.wma);
     if (txt && await sendTG(txt, { panel: "wma" })) for (const x of ev.slice(0, 10)) {
       sent[`${x.sym}|${x.ev}`] = today;
@@ -1015,6 +1029,7 @@ export async function main() {
     console.log(`IV geçmişi: ${n}/${top.length} kaydedildi · ${((Date.now() - t2) / 1e3).toFixed(0)}s`);
   }
 
+  writeTaRecent(st.taBook);
   writeTaKarne(fmtTaBook(st.taBook) + pausedList(st.taBook).map(p => `\n⏸ ${keyLabel(p.key)} durdurulmuş: son 10 fikir ${p.s10}R · ${p.daysLeft} gün`).join(""));   // panel okur
   const trimmed = trimState(st);
   if (trimmed) console.log(`Durum dosyası budandı: ${trimmed} eski kapanmış kayıt silindi.`);

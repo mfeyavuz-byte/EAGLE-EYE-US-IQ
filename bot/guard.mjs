@@ -113,5 +113,5 @@ export function guardDecision(it, { ideas, open, lead = null, corrOf = null, now
   if (!cd.ok) return { ok: false, why: `aynı yönde ${mem.length} açık fikir (${names})${leader ? " — lider sektörde bile sınır dolu" : ""}` };
   const tags = [ks.tag];
   if (mem.length) tags.push(`${leader ? "lider sektör" : "aynı küme"}: ${names} açık${cd.mult < 1 ? ` ×${cd.mult}` : ""}`);
-  return { ok: true, mult: +(ks.mult * cd.mult).toFixed(2), tag: tags.filter(Boolean).join(" · ") || null, leader };
+  return { ok: true, mult: +(ks.mult * cd.mult).toFixed(2), tag: tags.filter(Boolean).join(" · ") || null, leader: SECTOR_OF[it.sym] === "MKT" ? null : leader };
 }

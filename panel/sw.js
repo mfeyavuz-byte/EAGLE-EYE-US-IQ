@@ -1,5 +1,5 @@
 // Ağ önce: sayfa her açılışta güncel; çevrimdışıyken son kopya. Veri (api.github.com) ASLA önbelleğe alınmaz.
-const C = "eagle-us-panel-v2";
+const C = "eagle-us-panel-v3";
 self.addEventListener("install", e => { self.skipWaiting(); e.waitUntil(caches.open(C).then(c => c.addAll(["./", "index.html", "manifest.json", "icon-192.png"]))); });
 self.addEventListener("activate", e => e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== C).map(k => caches.delete(k)))).then(() => self.clients.claim())));
 self.addEventListener("fetch", e => {

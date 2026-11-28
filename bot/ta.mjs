@@ -228,9 +228,9 @@ export function fmtWma(list, stats) {
   if (!list?.length) return null;
   const ico = { UP: "🟢", DN: "🔴", TOUCH: "🟡", RETEST: "🟢" };
   return ["📏 200 HAFTALIK ORTALAMA", ...list.map(x => {
-    const s = stats?.[x.ev], act = x.dir === "C" ? "CALL AL" : "PUT AL";
+    const s = stats?.[x.ev], chase = x.ev === "UP" && x.d >= 0.05, act = chase ? "BEKLE (kovalama)" : x.dir === "C" ? "CALL AL" : "PUT AL";
     const stop = x.dir === "C" ? `stop: haftalık kapanış ${f2(x.wma * 0.97)} altı` : `stop: haftalık kapanış ${f2(x.wma * 1.03)} üstü`;
-    return `${ico[x.ev]} ${x.sym} ${act} — ${WMA_LABEL[x.ev]}\n   Fiyat ~${f2(x.px)} · ortalama ${f2(x.wma)} (${pc(x.d)}) · ${stop}${x.contract ? ` · ${x.contract}` : ""}` +
+    return `${chase ? "🟡" : ico[x.ev]} ${x.sym} ${act} — ${WMA_LABEL[x.ev]}${chase ? " ama %5'ten fazla uzakta → geri çekilmede al" : ""}\n   Fiyat ~${f2(x.px)} · ortalama ${f2(x.wma)} (${pc(x.d)}) · ${stop}${x.contract ? ` · ${x.contract}` : ""}` +
       (s?.n ? ` (geçmiş: 13 haftada piyasadan ${pc(s.x13)}, ${s.n} olay${s.x13 > 0 ? "" : " → zayıf, küçük tut"})` : "");
   })].join("\n");
 }
