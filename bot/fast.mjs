@@ -305,7 +305,7 @@ export async function scanSetups(st, now, toCloseMin, opts = {}) {
       const closeMs = now + (toCloseMin ?? 960 - mins) * 60e3, r = await riskFreeRate().catch(() => 0.04);
       const cc = await contractIdea({ sym, dir: c.dir, S, stop, target, r, today, allow0: (closeMs - now) / 60e3 > 90 && (st.ab = !st.ab), timeStop: capStop(a.hor, closeMs, now), mult: g.mult, multTag: g.tag });
       const near = fmtNear(nearEvent(opts.ev, now), now);
-      const text = [`🎯 ${sym} ${c.dir === "C" ? "CALL" : "PUT"} AL — ${cc.contract}`, `   ${SETUP_LABEL[c.name][c.dir]} (test: ort +${a.m.toFixed(2)}R${mc.p != null ? ` · olasılık %${Math.round(mc.p * 100)}` : ""})`, ...cc.lines, ...(near ? ["   " + near] : [])].join("\n");
+      const text = [`🎯 ${sym} ${c.dir === "C" ? "CALL" : "PUT"} AL — ${cc.contract}`, `   ${SETUP_LABEL[c.name][c.dir]}`, ...cc.lines, ...(near ? ["   " + near] : [])].join("\n");
       if (!(await sendTG(text, { panel: "fikir" }))) continue;
       st.setCd[ck] = now; sent++;
       const it = { src: "setup", setup: c.name, sym, dir: c.dir, ts: now, S, stop, target, hor: a.hor, mult: g.mult, lead: g.leader ?? null, tstop: cc.timeStop, expClose: cc.expClose,

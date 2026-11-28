@@ -222,7 +222,7 @@ const pc = x => `${x >= 0 ? "+" : "−"}%${Math.abs(x * 100).toFixed(1)}`;
 export function fmtTa(list) {
   if (!list?.length) return null;
   return ["📐 TEKNİK FORMASYONLAR", ...list.map(x => `${x.dir === "C" ? "🟢" : "🔴"} ${x.sym} ${x.dir === "C" ? "CALL" : "PUT"} AL — ${TA_LABEL[x.name][x.dir]}${TF_LABEL[x.a?.tf] || ""}\n` +
-    `   Giriş ~${f2(x.S)} · Hedef ${f2(x.target)} · Stop ${f2(x.stop)}${x.contract ? ` · ${x.contract}` : ""}${x.a ? ` (test: isabet %${Math.round(x.a.w * 100)} · ${x.a.m >= 0 ? "+" : ""}${x.a.m}R)` : ""}`)].join("\n");
+    `   Giriş ~${f2(x.S)} · Hedef ${f2(x.target)} · Stop ${f2(x.stop)}${x.contract ? ` · ${x.contract}` : ""}`)].join("\n");
 }
 export function fmtWma(list, stats) {
   if (!list?.length) return null;
@@ -231,7 +231,7 @@ export function fmtWma(list, stats) {
     const s = stats?.[x.ev], chase = x.ev === "UP" && x.d >= 0.05, act = chase ? "BEKLE (kovalama)" : x.dir === "C" ? "CALL AL" : "PUT AL";
     const stop = x.dir === "C" ? `stop: haftalık kapanış ${f2(x.wma * 0.97)} altı` : `stop: haftalık kapanış ${f2(x.wma * 1.03)} üstü`;
     return `${chase ? "🟡" : ico[x.ev]} ${x.sym} ${act} — ${WMA_LABEL[x.ev]}${chase ? " ama %5'ten fazla uzakta → geri çekilmede al" : ""}\n   Fiyat ~${f2(x.px)} · ortalama ${f2(x.wma)} (${pc(x.d)}) · ${stop}${x.contract ? ` · ${x.contract}` : ""}` +
-      (s?.n ? ` (geçmiş: 13 haftada piyasadan ${pc(s.x13)}, ${s.n} olay${s.x13 > 0 ? "" : " → zayıf, küçük tut"})` : "");
+      (s?.n && !(s.x13 > 0) ? " · ⚠ zayıf sinyal, küçük tut" : "");
   })].join("\n");
 }
 

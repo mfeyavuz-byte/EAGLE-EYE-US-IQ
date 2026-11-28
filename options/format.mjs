@@ -65,10 +65,8 @@ export function fmtAnalysis(res) {
   return L.join("\n");
 }
 
-export function fmtDailyIdeas(list, header) {
-  const L = [header, ""];
-  list.forEach((x, k) => { L.push(fmtIdea(x.idea, x.sym, k + 1), `Neden: ${x.reasons.join(" · ")}`, ""); });
-  if (!list.length) L.push("Bugün filtreleri geçen pozitif beklentili opsiyon yapısı yok. (Beklemek de bir pozisyondur.)", "");
-  L.push("ℹ Kâr olasılığı/EV: kalın kuyruklu dağılım + gerçekleşen oynaklık + spread kayması.");
-  return L.join("\n");
+export function fmtDailyIdeas(list, header) {                          // sade: kontrat · fiyat · maks zarar · kazanma; detay /opsiyon
+  if (!list.length) return null;
+  return [header, ...list.map(({ idea: i, sym }) => `🎯 ${sym} — ${i.tr} · ${trDate(i.expDate)}\n   ${fmtLegs(i)} @ $${Math.abs(i.debit).toFixed(2)} · maks zarar ${usd(i.maxLoss)}` +
+    ` · kazanma %${Math.round((i.popM ?? i.pop) * 100)}`)].join("\n");
 }

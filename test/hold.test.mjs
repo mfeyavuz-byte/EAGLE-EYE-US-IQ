@@ -31,7 +31,7 @@ test("liste: puan sırası, sektör başına en çok 2; mesaj sade", () => {
   const c = [["A", "T", 9], ["B", "T", 8], ["C", "T", 7], ["D", "F", 6], ["E", "H", 5]].map(([sym, sec, score]) => ({ sym, sec, score, price: 100, stop: 90 }));
   assert.deepEqual(pickList(c, 4).map(x => x.sym), ["A", "B", "D", "E"]);
   const t = fmtHold(pickList(c, 2), { variant: "MOM", test: { ex: 0.0127, win: 0.63 } });
-  assert.match(t, /^📈 1–2 AY TUTUŞ · 6 ay momentum lideri \(test: ayda piyasadan \+%1\.27 fazla · ayların %63'inde geçti\)/);
+  assert.match(t, /^📈 1–2 AY TUTUŞ \(6 ay momentum lideri\)\n/);
   assert.match(t, /\nA ~100\.00 · stop 90\.00\n/);
   assert.equal(fmtHold([], {}), null);
   assert.ok(PREF_KEYS.tutus);

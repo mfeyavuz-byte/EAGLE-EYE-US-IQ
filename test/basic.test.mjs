@@ -85,9 +85,8 @@ test("SAT sinyalinde stop fiyatın üstünde, hedef altında", async () => {
 
 test("sinyal satırı biçimi", () => {
   const s = fmtSignal({ ...base, price: 123.4, stopLoss: 118, target1: 131, rr: 1.4 });
-  assert.match(s, /🟢 X \$123\.4 · mom12 \+60% · zirveye −10%/);
-  assert.match(fmtSignal({ ...base, signal: "SAT", price: 50 }), /🔴 X \$50 · güven %80 · ADX 30/);
-  assert.match(s, /R:R 1\.4/);
+  assert.equal(s, "🟢 X AL $123.4 · hedef $131 · stop $118");                  // sade: varlık · giriş · hedef · stop
+  assert.equal(fmtSignal({ ...base, signal: "SAT", price: 50 }), "🔴 X SAT $50");
 });
 
 test("Telegram parçalama: hiçbir satır kaybolmaz, her parça ≤ 4096", async () => {
@@ -111,7 +110,7 @@ test("/sinyaller: filtreyi geçen tüm sinyaller listelenir (kesme yok)", async 
   const txt = fmtSignalList({ at: "x", analyzed: 1328, signals: sigs });
   assert.match(txt, /AL \(53\)/); assert.match(txt, /SAT \(29\)/);
   const all = chunks(txt).join("\n");
-  for (const s of sigs) assert.ok(all.includes(`${s.sym} $`), s.sym);
+  for (const s of sigs) assert.ok(all.includes(`${s.sym} ${s.signal} $`), s.sym);
 });
 
 test("spot çıkış: stop / hedef / 21 işlem günü; SAT 21 gün sonra ölçülür", async () => {

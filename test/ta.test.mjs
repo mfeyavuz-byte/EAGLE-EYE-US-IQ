@@ -50,11 +50,11 @@ test("200 haftalık ortalama: yukarı kırılım, aşağı kırılım, ilk geli�
 test("mesajlar sade; ayarlar var", () => {
   const t = fmtTa([{ sym: "NVDA", dir: "C", name: "EW2", S: 180.5, target: 195, stop: 176.2, contract: "02.01 180C ~$6.10", a: { w: 0.45, m: 0.089 } }]);
   assert.match(t, /^📐 TEKNİK FORMASYONLAR\n🟢 NVDA CALL AL — Elliott: 2\. dalga bitti/);
-  assert.match(t, /Giriş ~180\.5 · Hedef 195\.0 · Stop 176\.2 · 02\.01 180C ~\$6\.10 \(test: isabet %45 · \+0\.089R\)/);
+  assert.match(t, /Giriş ~180\.5 · Hedef 195\.0 · Stop 176\.2 · 02\.01 180C ~\$6\.10$/);
   const w = fmtWma([{ sym: "AAPL", ev: "DN", dir: "P", px: 170, wma: 175, d: -0.0286 }], { DN: { n: 2127, x13: -0.0018 } });
   assert.match(w, /🔴 AAPL PUT AL — 200 haftalık ortalamayı AŞAĞI kırdı/);
   assert.match(w, /stop: haftalık kapanış 180\.3 üstü/);
-  assert.match(w, /zayıf, küçük tut/);
+  assert.match(w, /⚠ zayıf sinyal, küçük tut$/);
   assert.equal(fmtTa([]), null);
   assert.ok(PREF_KEYS.formasyon && PREF_KEYS.wma200);
   assert.equal(TA.WMA_SIDE, 8);

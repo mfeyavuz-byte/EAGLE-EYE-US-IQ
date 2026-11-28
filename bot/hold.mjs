@@ -91,7 +91,7 @@ const pct = x => `${x >= 0 ? "+" : "−"}%${Math.abs(x * 100).toFixed(2)}`;
 export function fmtHold(list, cfg) {
   if (!list?.length) return null;
   const t = cfg?.test;
-  return [`📈 1–2 AY TUTUŞ · ${HOLD_LABEL[cfg?.variant] || cfg?.variant}${t ? ` (test: ayda piyasadan ${pct(t.ex)} fazla · ayların %${Math.round(t.win * 100)}'inde geçti)` : ""}`,
+  return [`📈 1–2 AY TUTUŞ (${HOLD_LABEL[cfg?.variant] || cfg?.variant})`,
     ...list.map(x => `${x.sym} ~${x.price.toFixed(2)} · stop ${x.stop.toFixed(2)}${x.contract ? ` · ${x.contract}` : ""}`),
-    "Çıkış: kapanış stop altına inerse ya da ~2 ay dolunca."].join("\n");
+    "Çıkış: stop altı kapanış ya da ~2 ay."].join("\n");
 }

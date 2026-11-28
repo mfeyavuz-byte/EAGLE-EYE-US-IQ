@@ -358,21 +358,10 @@ export function pickFresh(signals, sent, cap = DAY_CAP, secOf = s => UNI.meta?.[
 }
 
 // ---------- Mesaj biçimleri ----------
-export function fmtSignal(a) {
-  const icon = a.signal === "AL" ? "🟢" : "🔴";
-  const parts = [`${icon} ${a.sym} ${usd(a.price)}`];
-  if (a.signal === "AL" && a.mom12 != null) {
-    parts.push(`mom12 ${sgn(+(a.mom12 * 100).toFixed(0))}%`);
-    if (a.hi52 != null) parts.push(`zirveye −${((1 - a.hi52) * 100).toFixed(0)}%`);
-  } else parts.push(`güven %${a.confidence}`, `ADX ${a.adx}`);
-  if (a.rsi != null) parts.push(`RSI ${a.rsi}`);
-  parts.push(`RS60 ${sgn(a.rs60)}`);
-  if (a.stopLoss) parts.push(`stop ${usd(a.stopLoss)}`);
-  if (a.target1) parts.push(`hedef ${usd(a.target1)}`);
-  if (a.rr) parts.push(`R:R ${a.rr}`);
-  if (a.sizePct) parts.push(`boyut ~%${Math.round(a.sizePct * 100)} portföy`);
-  if (a.dip) parts.push("DİP");
-  if (a.edgeTag) parts.push(a.edgeTag);
+export function fmtSignal(a) {                                         // sade: varlık · giriş · hedef · stop
+  const parts = [`${a.signal === "AL" ? "🟢" : "🔴"} ${a.sym} ${a.signal} ${usd(a.price)}`];
+  if (a.target1 && a.signal === "AL") parts.push(`hedef ${usd(a.target1)}`);
+  if (a.stopLoss && a.signal === "AL") parts.push(`stop ${usd(a.stopLoss)}`);
   return parts.join(" · ");
 }
 
@@ -457,7 +446,7 @@ async function valueStep(st, today, mins, all, spyPx) {
     const picks = pickValue(rankValue(rows));
     if (picks.length >= 5) {                                       // veri eksikse dengeleme ertelenir (yanlış liste kurulmaz)
       const { bought, sold } = rebalanceValue(v, today, picks, priceOf);
-      await sendTG(fmtValueTrades(bought, sold) + `\nAday ${cands.length} · kalite incelenen ${rows.length} · seçilen ${picks.length}`, { panel: "deger" });
+      await sendTG(fmtValueTrades(bought, sold), { panel: "deger" });
     } else console.error(`[Değer] yetersiz veri (${picks.length} seçim) — dengeleme ertelendi`);
   }
   snapValue(v, today, priceOf, spyPx);
@@ -938,7 +927,7 @@ export async function main() {
     const { ideas, scanned } = await dailyOptionIdeas(signals, all, ivStore, r, spy.ret60);
     st.lastOptKey = optKey;
     addIdeas((st.optBook ||= []), ideas.slice(0, 6), today);          // karneye kaydet (vade sonunda ölçülecek)
-    await sendTG(fmtDailyIdeas(ideas.slice(0, 6), `🎯 ABD OPSİYON FİKİRLERİ — ${slot === "PM" ? "öğleden sonra" : "sabah"}\n${fmtTR()} (TR) · ${scanned} dayanak incelendi · risksiz faiz %${(r * 100).toFixed(2)}`),
+    if (ideas.length) await sendTG(fmtDailyIdeas(ideas.slice(0, 6), `🎯 OPSİYON FİKİRLERİ — ${slot === "PM" ? "öğleden sonra" : "sabah"}`),
       { panel: "opsiyon", buttons: [ideas.slice(0, 6).map(x => ({ text: `📊 ${x.sym}`, data: `/opsiyon ${x.sym}` }))] });
     console.log(`Opsiyon: ${ideas.length} fikir · ${((Date.now() - t1) / 1e3).toFixed(0)}s`);
   }

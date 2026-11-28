@@ -14,7 +14,7 @@ export function pmMovers(q, now = Date.now(), n = 8) {
   return xs.sort((a, b) => Math.abs(b.gap) - Math.abs(a.gap)).slice(0, n);
 }
 export function fmtPmMovers(list) {
-  return ["🌅 Açılış öncesi en çok hareket edenler (devam planı)", ...list.map(x =>
+  return ["🌅 AÇILIŞ ÖNCESİ HAREKETLİLER", ...list.map(x =>
     `${x.gap > 0 ? "↑" : "↓"} ${x.sym} ${x.gap > 0 ? "+" : "−"}%${Math.abs(x.gap * 100).toFixed(1)} ${x.S.toFixed(2)} · ${x.dir === "C" ? "CALL >" : "PUT <"}${x.entry} h${x.target} s${x.stop}${x.news ? ` · ${x.news.slice(0, 60)}${x.news.length > 60 ? "…" : ""}` : ""}`)].join("\n");
 }
 
